@@ -14,7 +14,10 @@ import (
 )
 
 // lockRetryDelay is how long to wait before the one permitted retry.
-const lockRetryDelay = time.Second
+//
+// It is a variable rather than a constant so tests can shorten the wait; the
+// production value never changes at runtime.
+var lockRetryDelay = time.Second
 
 // IsLockError reports whether err is a SQLite write-contention error
 // (SQLITE_BUSY / SQLITE_LOCKED and their extended forms), as opposed to a
