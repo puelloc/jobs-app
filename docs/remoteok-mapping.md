@@ -11,6 +11,32 @@
 
 Union of keys across *all* elements, including the notice, has two further keys: `last_updated` 1/100 and `legal` 1/100, both on element 0 only.
 
+## Mapping decisions (locked)
+
+These resolve the questions this document originally left open. They are the contract the normalizer implements; the Ambiguous fields section below retains the supporting evidence.
+
+| # | Question | Locked decision | Basis |
+| --- | --- | --- | --- |
+| 1 | Meaning of `salary_min`/`salary_max` = 0 | `0` → NULL in `salary_min_cents` and `salary_max_cents` | 82/99 rows are 0; storing "$0/yr" would be a false statement about pay |
+| 2 | Salary unit | Whole dollars → multiply by 100 | 16/17 non-zero rows are annual-scale (10000..750000); only one row (`30`/`36`) is hourly-scale |
+| 3 | `salary_period` | NULL | No field states a period; inferring one from magnitude is a classifier, not a mapping |
+| 4 | `salary_currency` | NULL | No currency field exists anywhere in the payload; hardcoding `USD` would be a guess |
+| 5 | `posted_at` source | `epoch` → RFC3339 UTC | Integer seconds, no offset parsing, and agrees with `date` on 99/99 |
+| 6 | `application_url` | `apply_url` (byte-identical to `url` on 99/99) | It is the apply link the source exposes; see the verification note below |
+| 7 | `discovery_url` | NULL | Identical to `listing_url`, so storing both would duplicate one value |
+| 8 | `employment_type`, `country`, `is_us` | NULL for v1 | Deriving them from `tags` or `location` is classification, not mapping |
+
+Note on #2 and #3 together: dollars are converted to cents, but `salary_period` stays NULL, so a stored `salary_min_cents`/`salary_max_cents` is a bare amount with no stated term. That is intentional — the amount is what the source publishes; the term is not.
+
+**Verification of #6 (settled, not deferred).** Probing the apply path with the scraper's own User-Agent showed:
+
+- `apply_url` returns **HTTP 200 with HTML** — it does not redirect to an external ATS.
+- The page's Apply button points at a relative `/l/<job-id>` link, and `/l/1137412`, `/l/1137411`, `/l/1137410` each return `302` back to `/remote-jobs/<slug>` — the same listing page. The chain terminates at `200` on `remoteok.com`; it never leaves the host.
+- No external ATS host appears in the feed (0/99) or in the fetched job page (0 mentions of `ashbyhq.com`, `greenhouse.io`, `lever.co`, `myworkdayjobs.com`, `icims.com`, `smartrecruiters.com`).
+- Requesting the page with curl's default User-Agent yields `302 → /` and then a redirect loop, whereas the scraper's User-Agent gets `200`. That difference is bot handling, not an ATS redirect: a default-curl probe of this path is misleading and should not be used to characterise it.
+
+Consequence: for this source, `application_url` and `listing_url` hold the same value. There is no external submission URL in the payload to store instead, so no `004_*.sql` migration is implied.
+
 ## Column mapping
 
 | Schema column | RemoteOK source | Transform | Nullable in practice | Confidence |
@@ -19,23 +45,23 @@ Union of keys across *all* elements, including the notice, has two further keys:
 | `company_id` | `company` (indirect) | resolve the `company` string to a `companies.id`, creating the company row if absent; the payload has no company identifier | `company` present and non-empty on all 99 | likely |
 | `company_application_platform_id` | — | constant NULL: RemoteOK is the discovery source, not an application system | always NULL | certain |
 | `external_id` | `id` | identity (string; 7 digits on all 99) | `id` present and non-empty on all 99 | certain |
-| `application_url` | `apply_url` | identity (URL string) | `apply_url` non-empty on all 99 (0 empty, 0 null) | likely |
-| `listing_url` | `url` | identity (URL string) | `url` non-empty on all 99 (0 empty, 0 null) | likely |
+| `application_url` | `apply_url` | identity (URL string); verified to be the source's apply link — it resolves to the listing page, not an external ATS (decision 6) | `apply_url` non-empty on all 99 (0 empty, 0 null) | certain |
+| `listing_url` | `url` | identity (URL string) | `url` non-empty on all 99 (0 empty, 0 null) | certain |
 | `discovery_platform_id` | — | constant 1 (`remoteok`, seed id 1 in 002_seed_platforms.sql) | always 1 | certain |
-| `discovery_url` | `url` | identity; byte-identical to `apply_url` on all 99, so this is a duplicate of `listing_url` in this dump | `url` non-empty on all 99 | unsure |
+| `discovery_url` | — | constant NULL: `url` is identical to `apply_url` on 99/99, so storing it here would duplicate `listing_url` (decision 7) | always NULL | certain |
 | `title` | `position` | identity (string) | `position` present and non-empty on all 99 | certain |
-| `employment_type` | — | constant NULL; no field maps (see `### employment_type`) | always NULL | likely |
+| `employment_type` | — | constant NULL; no field maps it, and deriving it from `tags` is classification (decision 8, see `### employment_type`) | always NULL | certain |
 | `is_remote` | — | constant 1; RemoteOK is a remote-only board | always 1 | likely |
-| `location_text` | `location` | identity (string; free text) | empty string in 34/99; non-empty on 65/99 | likely |
-| `country` | — | no clean source; NULL unless a location-parsing decision is made (see `### location`) | always NULL under this mapping | unsure |
-| `is_us` | — | no reliable source; NULL (see `### location`) | always NULL under this mapping | unsure |
-| `description` | `description` | identity (HTML string, unmodified) | present and non-empty on all 99; min length 543, max 25283 | certain |
-| `salary_min_cents` | `salary_min` | multiply by 100 (JSON number, integer-valued on all 99; see `### salary_min / salary_max`) | 0 in 82/99; non-zero in 17/99 | unsure |
-| `salary_max_cents` | `salary_max` | multiply by 100 | 0 in 82/99; non-zero in 17/99 | unsure |
-| `salary_currency` | — | constant NULL; the payload contains no currency field and no key name contains "currency" | always NULL | certain |
-| `salary_period` | — | constant NULL; no period field exists, and `'year'`/`'month'`/`'hour'` cannot be derived reliably (see `### salary_min / salary_max`) | always NULL | unsure |
+| `location_text` | `location` | identity (string; free text) | empty string in 34/99; non-empty on 65/99 | certain |
+| `country` | — | constant NULL; no structured source, and 34/99 locations are empty (decision 8, see `### country / is_us / location_text`) | always NULL | certain |
+| `is_us` | — | constant NULL; deriving it from location text is classification (decision 8) | always NULL | certain |
+| `description` | `description` | identity (HTML string, unmodified); mojibake stored as-is, repair is a separate pass | present and non-empty on all 99; min length 543, max 25283 | certain |
+| `salary_min_cents` | `salary_min` | 0 → NULL; otherwise multiply by 100 (dollars to cents) (decisions 1, 2) | 0 in 82/99 (becomes NULL); non-zero in 17/99 | certain |
+| `salary_max_cents` | `salary_max` | 0 → NULL; otherwise multiply by 100 (decisions 1, 2) | 0 in 82/99 (becomes NULL); non-zero in 17/99 | certain |
+| `salary_currency` | — | constant NULL; no currency field exists (decision 4) | always NULL | certain |
+| `salary_period` | — | constant NULL; no field states a period (decision 3) | always NULL | certain |
 | `tags_json` | `tags` | JSON-serialize the array, e.g. JSON.stringify(tags) | key present on all 99; empty array in 1/99; null in 0/99 | certain |
-| `posted_at` | `epoch` | convert epoch seconds to RFC3339 UTC, e.g. value `1790006411` → `2026-09-21T16:00:11Z` (see `### date vs epoch`) | `epoch` present and non-zero on all 99 | likely |
+| `posted_at` | `epoch` | epoch seconds → RFC3339 UTC, e.g. `1790006411` → `2026-09-21T16:00:11Z` (decision 5) | `epoch` present and non-zero on all 99 | certain |
 | `first_seen_at` | — | DB default on insert; never changed afterwards | never null (DB default) | certain |
 | `last_seen_at` | — | set to the run timestamp on every observation | never null (app/DB default) | certain |
 | `status` | — | constant `'open'` on insert; later flips to `'closed'` via the freshness contract | never null (default `'open'`) | certain |
@@ -58,6 +84,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 ## Ambiguous fields (needs a decision before code)
 
 ### salary_min / salary_max
+
+**Decision (locked):** decisions 1 and 2 — `0` becomes NULL; non-zero values are whole dollars and are multiplied by 100 into the cents columns. Retained below because it is the evidence for those two decisions.
 
 - What we see in the dump:
   - Both are JSON numbers, integer-valued on all 99 (`salary_min` type histogram: `number` 99/99).
@@ -85,6 +113,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 
 ### date vs epoch
 
+**Decision (locked):** decision 5 — `posted_at` comes from `epoch`. Retained below as the evidence.
+
 - What we see in the dump: both fields exist on all 99 jobs and agree exactly. Comparing `epoch | todate` against `date` with `+00:00` normalized to `Z` yields **0 mismatches out of 99**:
   - `id=1137412  date=2026-09-21T16:00:11+00:00  epoch=1790006411  epoch|todate=2026-09-21T16:00:11Z`
   - `id=1137411  date=2026-09-20T00:00:31+00:00  epoch=1789862431  epoch|todate=2026-09-20T00:00:31Z`
@@ -101,6 +131,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 - What to check to resolve it: examine a second run's payload and re-run the exact comparison; if the two fields still agree on all elements, the choice is free and should be made on parse simplicity.
 
 ### location
+
+**Decision (locked):** decisions 8 and the `location_text` row — `location_text` stores the value verbatim; `country` and `is_us` stay NULL. Retained below as the evidence.
 
 - What we see in the dump: `location` is a string on 99/99 jobs. 34/99 are empty strings (`""`). Top 20 values with counts (empty shown as `[]`):
   - 34 `[]`, 4 `[Remote]`, 2 `[Austin, Austin, Texas, United States]`, 2 `[Boston]`, 2 `[California, California, United States]`, 2 `[Redwood City]`, 2 `[Remote - US]`, 2 `[Remoto]`, 2 `[United States]`, 1 `[Agra, ]`, 1 `[Alice Springs, ]`, 1 `[Bangkok]`, 1 `[Bishkek, Bishkek, Bishkek City, Kyrgyzstan]`, 1 `[Black Bess, ]`, 1 `[Brisbane City, ]`, 1 `[Budapest, ]`, 1 `[Bury St Edmunds, ]`, 1 `[Chennai, Chennai, Tamil Nadu, India]`, 1 `[Cincinnati]`, 1 `[Dallas, Dallas, Texas, United States]`
@@ -119,6 +151,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 
 ### apply_url vs url
 
+**Decision (locked):** decision 6 — `application_url` is populated from `apply_url`, which is byte-identical to `url` on 99/99 rows and does not reach an external ATS. Retained below as the evidence.
+
 - What we see in the dump:
   - `apply_url == url` on **99/99** jobs. There are **0** jobs where they differ, so no differing example can be shown.
   - `apply_url` is an empty string on 0/99; `url` is an empty string on 0/99. Neither is ever null or missing.
@@ -133,6 +167,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 
 ### discovery_url
 
+**Decision (locked):** decision 7 — `discovery_url` stays NULL because it would duplicate `listing_url`. Retained below as the evidence.
+
 - What we see in the dump: there is no `discovery_url` key in the payload. The only candidate source is `url`, which is byte-identical to `apply_url` on 99/99 jobs, host `remoteOK.com` on 99/99, and never empty. Element 0 carries no URL at all.
 - Possible interpretations:
   1. `discovery_url` and `listing_url` both come from `url` and are therefore identical on every row, making `discovery_url` redundant for this source.
@@ -142,6 +178,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 - What to check to resolve it: decide whether `discovery_url` is meant to differ from `listing_url` for board-sourced rows at all, and if it is not, confirm that storing the same value in both columns is intended rather than an accident.
 
 ### tags
+
+**Decision (locked):** the array is serialized verbatim into `tags_json` with no interpretation, no de-duplication, and no reordering. The `full time`/`part time` entries are deliberately *not* used to populate `employment_type` (decision 8), so the tag list is stored as data while `employment_type` stays NULL. Retained below as the evidence.
 
 - What we see in the dump:
   - `tags` is present on 99/99. It is `null` on 0/99. It is an array on 99/99 and a non-array on 0/99.
@@ -159,6 +197,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 
 ### id
 
+**Decision (locked):** `id` becomes `external_id` unchanged, and id stability is handled by the freshness contract rather than by any code change — if RemoteOK changes an id, the old row closes and a new one opens. Retained below as the evidence.
+
 - What we see in the dump:
   - Type is `string` on 99/99 jobs (`.[1:][] | .id | type` → only `string`). Absent entirely from element 0, which has keys `["last_updated","legal"]` and `has("id") == false`.
   - All 99 are numeric-only strings matching `^[0-9]+$`: 0 jobs have non-numeric characters. Length is exactly 7 on all 99 (min 7, max 7).
@@ -172,6 +212,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 - What to check to resolve it: re-run the scraper on a later date and diff the id sets, then check whether any id from this sample persists with a different `slug`, `position`, or `epoch`.
 
 ### description
+
+**Decision (locked):** stored as-is, mojibake included; repair is a separate pass and out of scope for v1. Retained below as the evidence.
 
 - What we see in the dump:
   - Present on 99/99, empty string on 0/99.
@@ -188,6 +230,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 
 ### employment_type
 
+**Decision (locked):** decision 8 — stays NULL. Retained below as the evidence.
+
 - What we see in the dump: there is no `employment_type` field, and no key whose name contains `type`, `employment`, `contract`, `schedule`, or `commitment`. The only related evidence is inside `tags`: `full time` on 25/99 jobs, `part time` on 6/99, and `contract`, `intern`, `temporary` on 0/99 each. The `description` of some jobs mentions employment terms in prose, but that is unstructured text.
 - Possible interpretations:
   1. `employment_type` stays NULL for every RemoteOK row, because the payload never states it as data.
@@ -198,6 +242,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 
 ### posted_at
 
+**Decision (locked):** decision 5 — the source is `epoch`. Retained below as the evidence.
+
 - What we see in the dump: two candidate fields, both present on 99/99 and in exact agreement (0 mismatches, see `### date vs epoch`).
 - Possible interpretations:
   1. Use `epoch` (integer seconds, unambiguous, no offset parsing).
@@ -207,6 +253,8 @@ Union of keys across *all* elements, including the notice, has two further keys:
 - What to check to resolve it: on a second run, verify the `epoch` type histogram is still `number` 100% before committing to an integer parse.
 
 ### country / is_us / location_text
+
+**Decision (locked):** decision 8 — `country` and `is_us` stay NULL for v1; `location_text` stores the raw string. Retained below as the evidence.
 
 - What we see in the dump: no field names a country or a US flag. `location` carries country names inside free text on some rows (`United States` 12/99 by pattern, plus `India`, `Ireland`, `South Korea`, `Canada`, `Malaysia`, `Lithuania`, `Kyrgyzstan`, `United Kingdom`, `Australia`, `Pakistan`), and is an empty string on 34/99.
 - Possible interpretations:
@@ -265,26 +313,20 @@ The invariant from `docs/scraper-design.md`: running the scraper twice in a row 
 - **Freshness interaction:** because closure is decided by set membership in the run's seen set rather than by timestamps, a job that fails normalization on a later run is not closed — it stays in whatever state it had. Nothing about this dump changes that contract.
 
 ## Schema concerns
-- `salary_currency` has no source in this payload and no key name contains "currency", so every RemoteOK row would carry NULL in it. Evidence: `salary_currency` appears in `001_init.sql` at line 58, while the union of payload keys contains none of `salary_currency`, `currency`, or any key with "currency" in the name. This is dead weight for this source, and whether it is reserved for other sources is a decision the schema's own comment already implies.
-- `country` and `is_us` likewise have no reliable source: the only geographic signal is the free-text `location`, which is an empty string on 34/99 jobs and mixes cities, regions, and countries in an inconsistent shape (`Boston`, `Austin, Austin, Texas, United States`, `Agra, `). Both columns would be NULL or a partial inference for this source. The mapping does not change to accommodate them, and the schema does not need to change either — but the columns will be unpopulated.
+- `salary_currency` has no source in this payload and no key name contains "currency", so every RemoteOK row would carry NULL in it. Evidence: `salary_currency` appears in `001_init.sql` at line 58, while the union of payload keys contains none of `salary_currency`, `currency`, or any key with "currency" in the name. Decision 4 locks it to NULL, so for this source the column is dead weight and whether it is reserved for other sources is left as-is.
+- `country` and `is_us` likewise have no reliable source: the only geographic signal is the free-text `location`, which is an empty string on 34/99 jobs and mixes cities, regions, and countries in an inconsistent shape (`Boston`, `Austin, Austin, Texas, United States`, `Agra, `). Decision 8 locks both to NULL. The mapping does not change to accommodate them, and the schema does not need to change either — but the columns will be unpopulated for this source.
 - There is no column for the `original` and `verified` flags, which are present on 11/99 and 6/99 jobs respectively and are always `true` when present. `raw_data` is the only home for them. Similarly there is no column for `slug`, which is distinct on 99/99 values.
 - `is_remote` cannot be sourced from the payload at all, in either direction: no element carries a remote flag, and all 99 jobs come from a remote-only board. The column will be a constant 1 for this source, which is a value the mapping asserts rather than one the data provides.
-- The RemoteOK `salary_min`/`salary_max` values are JSON numbers whose period is not stated and are 0 on 82/99 jobs, while the schema's `salary_min_cents`/`salary_max_cents` are INTEGER cents and `salary_period` has a CHECK constraint limited to `'year'`, `'month'`, `'hour'`. Nothing in the payload selects among those three, so `salary_period` cannot be populated without inference. All three columns are marked `unsure` in the mapping table for this reason.
+- The RemoteOK `salary_min`/`salary_max` values are JSON numbers whose period is not stated and are 0 on 82/99 jobs, while the schema's `salary_min_cents`/`salary_max_cents` are INTEGER cents and `salary_period` has a CHECK constraint limited to `'year'`, `'month'`, `'hour'`. Nothing in the payload selects among those three, so `salary_period` is locked to NULL (decision 3) rather than inferred, and a stored cents value therefore has no stated term. This is recorded as a property of the data, not as a schema defect.
 - `description` is stored as `TEXT` and the maximum observed length is 25283 characters, well within SQLite's limits, so no concern there. The real quality issue is the widespread mojibake (78/99 descriptions), which is a data-repair matter rather than a schema one.
 - `tags_json` being `TEXT` with `json_valid` is sufficient to store this dump's `tags` shape: all 99 values are arrays of strings, with 0 non-string elements and 1 empty array. No evidence in this dump argues for a different representation.
 
 ## Open questions for implementation
 - Do we need a second run to prove `id` stability across runs, and can that run be timed to also test whether a re-posted listing keeps its id?
 - The response contains exactly 100 elements while the file is 624930 bytes — is 100 a hard cap on this endpoint, and if so does a query parameter or a different route exist to page beyond it?
-- Should `slug` be written into `raw_data`, or is it genuinely droppable given it already ends with `-<id>` on 98/99 jobs and `listing_url` embeds the same string?
-- Is `apply_url` ever a non-`remoteOK.com` host, or does it always point back at RemoteOK's own listing page, and does following it produce a redirect to an external ATS?
-- Should `application_url` be populated from `apply_url` at all when the two fields are byte-identical on 99/99 jobs, or should it stay NULL until a real application URL is resolvable?
-- Which field is authoritative for `posted_at` — `epoch` or `date` — given they currently agree on 99/99?
-- Are `full time` (25/99) and `part time` (6/99) in `tags` the intended source for `employment_type`, or does `employment_type` remain NULL for this source?
-- Is the mojibake in `description`, `position`, and `location` introduced by RemoteOK's encoding or by our capture path, and if it is repaired, is it repaired at write time or at read time?
 - Does a missing `original` or `verified` key mean `false`, or does it mean the flag was never evaluated for that listing?
-- Is a `salary_min`/`salary_max` of 0 "not specified" or a genuine zero, and what currency and period should the non-zero values be interpreted with?
-- What does an empty `location` mean — unrestricted, unstated, or remote-by-default — and does `Remote - US` describe candidate eligibility or employer location?
-- Should `country` and `is_us` be populated from `location` text at all, given 34/99 empty values and no structured country field?
 - Does `tags` element order carry meaning (it is neither alphabetical nor obviously ranked), and are tags assigned by the employer or by RemoteOK?
 - Are the department-like tags (`exec`, `medical`, `dev`, `ops`) board taxonomy or employer-supplied attributes, and does mixing them with skills affect how `tags_json` should be queried?
+- Is the mojibake in `description`, `position`, and `location` introduced by RemoteOK's encoding or by our capture path? The storage decision is settled (store as-is), but the origin is not, and it determines whether a later repair pass is even possible on our side.
+
+Questions settled by the locked decisions above, and therefore not open: the meaning of salary zero (decision 1), the salary unit and period (decisions 2 and 3), the currency (decision 4), the `posted_at` source (decision 5), which URL populates `application_url` (decision 6, verified by probing the apply path), whether `discovery_url` is stored (decision 7), and whether `employment_type`, `country`, and `is_us` are derived (decision 8). What to do about `slug` is a property of the `raw_data` blob rather than of a column mapping.
