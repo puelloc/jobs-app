@@ -11,15 +11,16 @@ import (
 
 // Defaults, per the Inputs table in docs/scraper-design.md.
 const (
-	DefaultDBPath   = "./jobs.db"
-	DefaultDataDir  = "./data"
-	DefaultLogLevel = "info"
+	DefaultDBPath     = "./jobs.db"
+	DefaultDataDir    = "./data"
+	DefaultLogLevel   = "info"
+	DefaultServerAddr = "127.0.0.1:8080"
 
 	// DefaultEndpoint is the RemoteOK URL recorded in
-	// internal/db/migrations/002_seed_platforms.sql for platform id 1.
-	// TODO(mapping): confirm this URL serves JSON and not an HTML listing page;
-	// the seed value is a job-board page URL, not necessarily a feed.
-	DefaultEndpoint = "https://remoteok.com/remote-dev-jobs"
+	// internal/db/migrations/002_seed_platforms.sql for platform id 1. It is the
+	// JSON feed endpoint: the previous value, https://remoteok.com/remote-dev-jobs,
+	// returns the HTML listing page and made the parse step fail.
+	DefaultEndpoint = "https://remoteok.com/api"
 
 	DefaultUserAgent = "jobs-app/0.1 (+https://github.com/local/jobs-app)"
 
@@ -35,6 +36,7 @@ type Config struct {
 	UserAgent   string
 	HTTPTimeout time.Duration
 	LogLevel    string
+	ServerAddr  string
 }
 
 // Load resolves configuration from the environment, applying the documented
@@ -46,6 +48,7 @@ func Load() (Config, error) {
 		Endpoint:    envOrDefault("REMOTEOK_ENDPOINT", DefaultEndpoint),
 		UserAgent:   envOrDefault("USER_AGENT", DefaultUserAgent),
 		LogLevel:    envOrDefault("LOG_LEVEL", DefaultLogLevel),
+		ServerAddr:  envOrDefault("SERVER_ADDR", DefaultServerAddr),
 		HTTPTimeout: DefaultHTTPTimeout,
 	}
 
@@ -89,6 +92,9 @@ func (c Config) validate() error {
 	}
 	if c.UserAgent == "" {
 		return fmt.Errorf("USER_AGENT must not be empty")
+	}
+	if c.ServerAddr == "" {
+		return fmt.Errorf("SERVER_ADDR must not be empty")
 	}
 	if c.HTTPTimeout <= 0 {
 		return fmt.Errorf("HTTP_TIMEOUT must be greater than zero")
