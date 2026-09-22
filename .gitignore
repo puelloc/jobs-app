@@ -8,3 +8,9 @@
 
 # Raw scraped payloads (large, re-fetchable evidence)
 /data/
+
+# Go toolchain caches kept inside the repo, because this sandbox cannot write the
+# default GOPATH/GOCACHE locations under $HOME
+/.gopath/
+/.gocache/
+/.gomodcache/
