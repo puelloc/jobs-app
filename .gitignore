@@ -1,0 +1,10 @@
+# macOS Finder metadata
+.DS_Store
+
+# SQLite database files (never commit data)
+*.db
+*.db-shm
+*.db-wal
+
+# Raw scraped payloads (large, re-fetchable evidence)
+/data/
