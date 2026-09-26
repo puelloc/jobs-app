@@ -49,8 +49,21 @@ remote engineers) is **out of scope for M1/M2** and belongs against the seeded r
 
 | Milestone | Scope | Status |
 | --- | --- | --- |
-| **M1** | S&P wikitext parser + golden fixtures + `companies` enrichment columns + `platforms` `'reference'` rebuild + migration-runner FK-off support + `scrape_runs`/exit codes | **ready** |
+| **M1** | S&P wikitext parser + golden fixtures + `companies` enrichment columns + `platforms` `'reference'` rebuild + migration-runner FK-off support + `scrape_runs`/exit codes | **in progress** |
 | **M2a** | Careers ladder tiers 1–4 + `5a` (verified public ATS JSON APIs) + `5c` (SmartRecruiters) | planned |
+
+### M1 progress
+
+| Step | Status |
+| --- | --- |
+| Commit 1 — migration runner FK-off support + 5 tests | done |
+| Commit 2 — `004_reference_platforms.sql` + `006_company_enrichment.sql` | done |
+| Commit 3 — `internal/sp1500` parser + golden fixtures | done |
+| Commit 4 — upsert `companies` + `scrape_runs` + exit codes | not started |
+
+Migration numbering was corrected during implementation: the existing `003_fix_remoteok_endpoint.sql`
+already owned version 003, so the new migrations are `004` and `006` (005 stays reserved for M2).
+`TestMigrationVersionsAreUniqueAndOrdered` caught the original collision. |
 | **M2b** | `5b` HTML-only ATS tenant extraction (Oracle Cloud, Eightfold, Workday, Phenom, SuccessFactors, Taleo) | planned |
 | **M3** | browser-use behind `ENABLE_BROWSER_USE`, Go→Python subprocess, shared validation gate | deferred |
 
@@ -89,7 +102,7 @@ curl -s -H "User-Agent: <configurable>" \
 | S&P 500 | **503** | 500 | 3 | explicit CIK column, 10-digit zero-padded |
 | S&P 400 | **399** | 356 | 43 | no CIK column; `CIK=` in SEC link (119 numeric, 281 ticker-like) |
 | S&P 600 | **600** | 392 | 208 | explicit CIK column |
-| **Total** | **1,502** | | **~253** | |
+| **Total** | **1,502** | | **252** | |
 
 A **data row** is a row block containing a ticker template. That predicate is what yields these
 numbers, and it is the predicate the parser must use.
@@ -135,7 +148,7 @@ but parse with depth counting anyway — see §6.4 (a).
 
 ### 4.5 Plain-text rows are companies with no Wikipedia article
 
-The ~253 rows whose Security cell is plain text are **not** a formatting accident. Verified: "Agree
+The 252 rows whose Security cell is plain text are **not** a formatting accident. Verified: "Agree
 Realty", "AZZ, Inc.", "Chemed Corp.", and "Darling Ingredients" all return no enwiki article, and
 enwiki search returns the S&P list pages themselves.
 
@@ -329,8 +342,8 @@ catalogue.
 
 Wikidata by article title is the primary resolver (99.6%). Tier 2: Wikipedia infobox, for the ~14/16
 zero-P856 entities that have articles. Tier 3: **SEC 10-K**, promoted from "last resort" to the
-**designated fallback for the ~253 no-article rows** — those rows have CIKs (S&P 500) or SEC links
-(400/600), and name search recovers only 40/253 (15.8%) at ~88% precision, so search is not enough.
+**designated fallback for the 252 no-article rows** — those rows have CIKs (S&P 500) or SEC links
+(400/600), and name search recovers only 40/252 (15.9%) at ~88% precision, so search is not enough.
 
 ### 5.5 Milestone split and browser-use deferral
 
@@ -485,7 +498,7 @@ gives the audit trail without the inventory.
    empties**, then index positionally. Cell 1 = ticker, cell 2 = security name. Dropping empties is
    load-bearing: the positional CIK access in rule 7 depends on it.
 6. **Security name:** accept `[[Article|Display]]`, `[[Article]]`, or plain text; strip `<ref>`,
-   HTML comments, and nested templates. Plain text is a legitimate outcome (~253 rows), not an error.
+   HTML comments, and nested templates. Plain text is a legitimate outcome (252 rows), not an error.
 7. **CIK, per page:**
    - S&P 500: cell 7, 10-digit zero-padded numeric.
    - S&P 600: the CIK column after SEC filings.
@@ -703,7 +716,7 @@ adversarial re-testing, and several were stated confidently before being overtur
 | Tables contain a website column | No website column on any of the three pages | Direct inspection of all three |
 | Row counts `502 / 399 / 600 = 1,501` | `503 / 399 / 600 = **1,502**`; S&P 500 gains CBOE via `{{BZX link}}` | Independent raw template count + page prose ("503 common stocks") |
 | `503 + 399 + 600 = 1,503` | = **1,502** | Arithmetic re-check; same class of slip the brief kept catching |
-| 15 plain-text rows (an S&P 400 quirk) | **~253 across all pages (1 / 43 / 209)**; these are companies with no article | Full three-page scan; article-existence checks |
+| 15 plain-text rows (an S&P 400 quirk) | **252 across all pages (1 / 43 / 208)**; the 209 figure came from a hand probe and was off by one; these are companies with no article | Full three-page scan; article-existence checks |
 | `preferred` rank is a no-op for Apple, so ignore it | Apple is the **outlier**; ~180 entities have a correct `preferred` and 8 spot-checked majors resolved via it | Distribution over all 1,237 entities |
 | Whole-page ticker template count is fine | Prose in change-log tables inflates it (bogus 601 / 606) | Scoping extraction to the component table |
 | Extraction outside the component table is harmless | It fails by returning a *plausible* wrong number, not an error | Same |
