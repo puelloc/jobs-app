@@ -203,6 +203,16 @@ func validateHTML(v Verdict, c Candidate, r Response) Verdict {
 		return v
 	}
 
+	// A third-party board is only ever corroborated by naming the company. When the caller supplied
+	// no usable name there is nothing to check, and an anonymous vendor page must not be accepted
+	// just because its title happens to read plausibly. This applies to the HTML board as well as
+	// the JSON API: Ashby serves a bare "Jobs" shell for a company that does not exist.
+	if c.Kind == KindATSBoard && distinctiveToken(c.CompanyName) == "" {
+		v.Status = StatusRejected
+		v.Reason = "unverifiable_ats_title"
+		return v
+	}
+
 	// Hard rejections run before the evidence test. Evidence is generous by design - a path
 	// containing "careers" counts on its own - so a decoy that happens to carry one of those
 	// signals would be accepted before the specific rule against it was ever consulted. That is
