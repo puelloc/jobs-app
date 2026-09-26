@@ -933,7 +933,18 @@ the first error, and that the summary distinguishes "zero results" from "all ite
 code is where that distinction has to survive: exit 4 is "considered companies and accepted nothing",
 exit 1 is "errored", and deriving the code from the accepted count alone collapses them.
 
-**5. A test fake whose contract diverges from the real implementation.** `fakeClock.Sleep` returned
+**5. A fake that receives the wrong input shape.** The index targets pointed at `/wiki/<page>`
+(rendered HTML) instead of `?action=raw` (wikitext), and the end-to-end test served fixtures **keyed
+by whatever path the targets declared** - so the stub accepted the wrong input as though it were the
+right one and the bug survived until the first live run. Same family as `containsCompanyToken`
+returning `true` on an empty name: a check that never sees the input it was written to constrain.
+
+The rule: **every stub's routing must derive from the real request shape, not from what the test
+happens to send.** For the Wikipedia stubs that means keys built from `(action, titles, site)`, and
+for the index stub the keys now come from the targets themselves with an assertion that they request
+`action=raw`.
+
+**6. A test fake whose contract diverges from the real implementation.** `fakeClock.Sleep` returned
 `nil` unconditionally, modelling a sleep that ignores cancellation - the opposite of the real
 `sleepContext`. It did not merely fail to catch the race above; it *masked* it, because the retry
 loop appeared to continue past a cancelled context.
