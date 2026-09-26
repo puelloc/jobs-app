@@ -120,6 +120,24 @@ Implementation notes:
   heading and path at once and was accepted until the specific rule was consulted first.
 - A candidate's `Kind` follows **where the URL points**, not which tier produced it. A navigation
   link to `jobs.ashbyhq.com` labelled `career_site` bypassed the stricter board rules entirely.
+- Boilerplate sub-pages are rejected by **segment name**, not by depth. Depth cannot separate them:
+  Boeing's `/careers/privacy-statement` sits at the same depth as `/company/careers`. The reject list
+  covers `privacy`, `terms`, `legal`, `cookie`, `accessibility`, `eeo`, `diversity`, `apply` and
+  similar, matched on the lowercased segment.
+- The **`Fetcher` contract is documented at the interface**, before any real implementation exists,
+  because the recorded fixtures can only exercise what the seam exposes. The critical clause is that
+  a 4xx/5xx returns `(Response, nil)` - it is an answer, and the gate distinguishes "forbidden" from
+  "unreachable" - while a non-nil error means no complete response was received and is recorded as an
+  unknown, not a rejection.
+- **Dual-class collapse is pinned by name**, not by count alone:
+  `TestSP1500UpsertCollapsesExactlyFourDualClassPairs` asserts the exact set
+  (Fox Corporation, News Corp, Alphabet Inc., Under Armour) so a fifth pair appearing, or one
+  silently ceasing to collapse, fails the test. Berkshire Hathaway and Brown-Forman each appear on a
+  single row in the current index, which is why 1,502 rows become 1,498 companies and not fewer.
+- **First real-network run should be the eleven verified companies** from section 4.11 before all
+  1,498. If the gate holds on those it will likely hold at scale; if it does not, the seam contract
+  is wrong and that is cheaper to learn on eleven companies than on the full set. It also produces
+  the first honest resolution rate, which is the measurement section 8.1 needs.
 - A **transport failure is an error state, not a rejection**: an unreachable site is unknown, not
   disproven, so it stays retryable.
 - A vendor board ranks **below** a company's own page, matching the recorded preference for a
@@ -788,8 +806,37 @@ adversarial re-testing, and several were stated confidently before being overtur
 | "Qwen3 27B" is not a real tag | It is real: `qwen3.8-27b-64k:latest` | `GET /api/tags` on the live host |
 | The model may not do structured actions at all | It emits a valid nested-argument tool call | `POST /api/chat` with a tools schema |
 
-**Recurring failure mode:** treating a derived conclusion as a verified one. Three instances: the row-count
-sum, the exposure claim, and the `preferred`-rank generalization. Always re-derive before asserting.
+### Recurring failure modes
+
+**1. Treating a derived conclusion as a verified one.** Three instances: the row-count sum (asserted
+1,503 for 1,502), the Ollama exposure claim (inferred reachability from probe success without
+checking the destination address), and the `preferred`-rank generalization (generalized from Apple,
+the outlier). Re-derive before asserting; check the thing you actually measured, not the thing you
+inferred from it.
+
+**2. A check that silently passes when its input is absent.** This one has bitten four times, and it
+is the more dangerous pattern because the code looks correct:
+
+| Where | The check | Why it passed anyway |
+| --- | --- | --- |
+| Validation gate | accept only on real evidence | a bare `200` was treated as evidence (finding #9) |
+| Migration runner | `-- migrate:fk_off` disables enforcement | a typo like `-- migrate:fk-off` was ignored as a comment, so the migration ran with FKs on |
+| `containsCompanyToken` | the company must appear in the title | returned `true` when no company name was supplied, so the check meant to catch fake-slug 200s passed everything |
+| `distinctiveToken` | match the longest word of the company name | returned `"company"` for "The Coca-Cola Company", which nearly any page matches |
+
+The shape is `if input present, assert property`. It defeats itself the first time the input is
+missing, and missing input is the *normal* case for a scraper: an unnamed company, a page with no
+title, a link with no href.
+
+**The rule:** the absent-input case is its own explicit rejection, never a no-op. `containsCompanyToken`
+stays permissive so callers can use it as a substring test, and the *callers* that need
+corroboration reject separately (`unverifiable_ats_title`). The audit is to grep the gate and the
+parser for predicates of that shape and confirm each has an `else → reject` arm.
+
+A related instance from the parser: the delimiter regex `\n[ \t]*\|` consumed only one pipe of
+`\n||`, because Go's regexp takes the first matching alternative and does not backtrack into the
+second. The check "did this split produce cells" passed while every cell carried a leading `|`. A
+malformed match that yields *plausible* output is worse than a match that fails.
 
 ---
 

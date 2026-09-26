@@ -17,7 +17,42 @@ import (
 	"strings"
 )
 
-// Fetcher retrieves a URL. Implementations own transport, timeouts, redirects and body limits.
+// Fetcher retrieves a URL.
+//
+// The contract is spelled out here rather than left to the implementation because the recorded
+// fixtures can only exercise what the seam exposes. A real Fetcher that returns (body, error) with
+// the status embedded, against a stub that returns (body, finalURL, status), would pass every test
+// and fail on first contact with a real site.
+//
+//   - Return (Response, nil) whenever an HTTP response was received, *including* 4xx and 5xx.
+//     A 403 or 429 is an answer: the gate distinguishes "forbidden" and "rate_limited" from
+//     "unreachable", and collapsing them into a Go error would lose that distinction and make a
+//     blocked site look like a dead one.
+//
+//   - Return a non-nil error only when no complete response was received: DNS failure, connection
+//     refused or reset, TLS failure, timeout, or too many redirects. The caller records that as
+//     StatusError through Response.TransportError, which is an *unknown*, not a rejection, so the
+//     site stays retryable.
+//
+//   - Redirects are followed, up to a bounded number of hops (5 is the intended default). The
+//     returned FinalURL is the document actually read, not the URL requested. This is load-bearing:
+//     jobs.nike.com resolving to careers.nike.com, or a branded page resolving to a Workday tenant,
+//     is how the applicant-tracking vendor is identified at all.
+//
+//   - Status is the final response's status, never a redirect's 3xx.
+//
+//   - ContentType is the final response's Content-Type header including any parameters, because the
+//     gate branches on it to choose the JSON rules over the HTML ones rather than sniffing bytes.
+//
+//   - Body is already bounded by the caller's configured limit. A vendor's job board can be tens of
+//     megabytes (Ashby returned 13.8MB for one company during planning), so the limit belongs here
+//     rather than in the gate.
+//
+//   - The request carries the configured User-Agent and uses normal TLS verification. Neither is
+//     spoofed or relaxed: 403 is recorded as a forbidden response, not disguised.
+//
+// A timeout is a per-request, configurable setting, and surfaces as a transport error wrapping
+// context.DeadlineExceeded so an attempt record can say "timeout" rather than "network".
 type Fetcher interface {
 	Fetch(ctx context.Context, url string) (Response, error)
 }

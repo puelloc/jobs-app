@@ -3,6 +3,7 @@ package sp1500
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -461,6 +462,99 @@ func TestFixturesHaveNoNestedTables(t *testing.T) {
 		}
 		if maxDepth != 1 {
 			t.Errorf("%s reaches table depth %d, want 1; the fixtures gained a nested table and the range logic now matters", name, maxDepth)
+		}
+	}
+}
+
+// A dual-class listing puts one company on two rows sharing a Security name, so the upsert collapses
+// them into one companies row. This pins the exact set, by name, because a count alone cannot show
+// which pair changed: the point is to notice a *fifth* pair appearing when the index changes, and a
+// pair silently ceasing to collapse.
+//
+// Expected four, from the three pages:
+//
+//	Fox Corporation   (FOXA, FOX)      S&P 500
+//	News Corp         (NWSA, NWS)      S&P 500
+//	Alphabet Inc.     (GOOGL, GOOG)    S&P 500
+//	Under Armour      (UA, UAA)        S&P 600
+//
+// The obvious fifth candidate is absent: Berkshire Hathaway and Brown-Forman each appear on a
+// single row in the current index, so the 1,502 rows collapse to 1,498 companies and not fewer.
+func TestSP1500UpsertCollapsesExactlyFourDualClassPairs(t *testing.T) {
+	groups := map[string][]Company{}
+	for _, tc := range []struct {
+		index Index
+		file  string
+	}{
+		{SP500, "sp500.wiki"},
+		{SP400, "sp400.wiki"},
+		{SP600, "sp600.wiki"},
+	} {
+		for key, rows := range shareClassGroups(parseFixture(t, tc.index, tc.file)) {
+			if len(rows) > 1 {
+				groups[key] = rows
+			}
+		}
+	}
+
+	got := make([]string, 0, len(groups))
+	for _, rows := range groups {
+		got = append(got, rows[0].Name)
+	}
+	sort.Strings(got)
+
+	want := []string{"Alphabet Inc.", "Fox Corporation", "News Corp", "Under Armour"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("dual-class groups = %v, want %v", got, want)
+	}
+
+	// Each group is exactly one pair, and both rows carry the same name.
+	for key, rows := range groups {
+		if len(rows) != 2 {
+			t.Errorf("group %q has %d rows, want 2", key, len(rows))
+		}
+		for _, c := range rows {
+			if c.Name != rows[0].Name {
+				t.Errorf("group %q mixes names %q and %q", key, rows[0].Name, c.Name)
+			}
+		}
+	}
+
+	// Row total minus collapapses must equal the company count the upsert produces.
+	rows, companies := 0, 0
+	for _, tc := range []struct {
+		index Index
+		file  string
+	}{
+		{SP500, "sp500.wiki"},
+		{SP400, "sp400.wiki"},
+		{SP600, "sp600.wiki"},
+	} {
+		parsed := parseFixture(t, tc.index, tc.file)
+		rows += len(parsed.Companies)
+		companies += len(shareClassGroups(parsed))
+	}
+	if rows != 1502 {
+		t.Errorf("parsed rows = %d, want 1502", rows)
+	}
+	if companies != 1498 {
+		t.Errorf("distinct companies = %d, want 1498 (%d rows less %d collapses)", companies, rows, len(groups))
+	}
+}
+
+// The names that look like dual-class candidates but are not in the current index. Pinned because
+// the assumption "Berkshire must be two rows" is natural and wrong here.
+func TestBerkshireAndBrownFormanAreSingleRows(t *testing.T) {
+	got := parseFixture(t, SP500, "sp500.wiki")
+	for _, want := range []string{"Berkshire Hathaway", "Brown–Forman"} {
+		n := 0
+		for _, c := range got.Companies {
+			if c.Name == want {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%q appears on %d rows, want 1: if the index gained a second share class, the collapse count changes", want, n)
 		}
 	}
 }

@@ -154,12 +154,29 @@ func TestCareersURLsFromSitemapDropsBoilerplateSubPages(t *testing.T) {
 	locs := []string{
 		"https://example.com/careers/privacy-statement",
 		"https://example.com/careers/apply",
-		"https://example.com/careers",
 		"https://example.com/careers/faq",
+		"https://example.com/careers/eeo-statement",
+		"https://example.com/careers/accessibility",
+		"https://example.com/careers/diversity",
+		"https://example.com/careers/cookie-policy",
+		"https://example.com/careers",
 	}
 	got := CareersURLsFromSitemap(locs)
 	if len(got) != 1 || got[0] != "https://example.com/careers" {
 		t.Errorf("got %v, want only /careers", got)
+	}
+}
+
+// The reject list is about the *segments*, not any careers substring, so a real entry point with a
+// company-specific leaf is kept.
+func TestCareersURLsFromSitemapKeepsCompanySpecificLeaves(t *testing.T) {
+	locs := []string{
+		"https://example.com/careers/north-america",
+		"https://example.com/company/careers",
+	}
+	got := CareersURLsFromSitemap(locs)
+	if len(got) != 2 {
+		t.Errorf("got %v, want both kept: neither leaf names a document", got)
 	}
 }
 

@@ -128,15 +128,28 @@ func CareersURLsFromSitemap(locs []string) []string {
 }
 
 // boilerplateSegments are path segments that mark a supporting page rather than an entry point.
-// They appear under careers paths - privacy notices, application forms, accessibility statements -
-// and would otherwise rank highly because they are shallow.
+// They appear *under* a careers path - privacy notices, EEO statements, accessibility pages - and
+// would otherwise rank highly because they are shallow.
+//
+// This is a rejection list, not a depth heuristic, because depth does not separate them: Boeing's
+// /careers/privacy-statement sits at the same depth as /company/careers. What distinguishes them is
+// that the segment names a document rather than a place to find work.
+//
+// Matching is exact on the lowercased segment. A company that genuinely publishes /careers/diversity
+// as its entry point loses to any other candidate, which is the right trade: a missed candidate
+// costs one more fetch, whereas a wrong pick is stored and trusted downstream.
 var boilerplateSegments = map[string]bool{
-	"privacy": true, "privacy-statement": true, "privacy-policy": true,
-	"terms": true, "terms-of-use": true, "terms-and-conditions": true,
-	"legal": true, "cookies": true, "cookie-policy": true, "accessibility": true,
+	"privacy": true, "privacy-statement": true, "privacy-policy": true, "privacy-notice": true,
+	"terms": true, "terms-of-use": true, "terms-and-conditions": true, "terms-conditions": true,
+	"legal": true, "legal-notice": true, "disclaimer": true, "disclosures": true,
+	"cookies": true, "cookie-policy": true, "cookie-notice": true,
+	"accessibility": true, "accessibility-statement": true, "accessibility-policy": true,
+	"eeo": true, "eeo-statement": true, "eeo-policy": true, "equal-opportunity": true,
+	"diversity": true, "diversity-statement": true, "diversity-policy": true,
+	"accommodations": true, "accommodation": true, "veterans": true, "disability": true,
 	"faq": true, "faqs": true, "contact": true, "contact-us": true,
-	"sitemap": true, "rss": true, "search": true, "login": true, "signin": true,
-	"apply": true, "application": true, "disclaimer": true,
+	"sitemap": true, "rss": true, "search": true, "login": true, "signin": true, "sign-in": true,
+	"apply": true, "application": true, "application-status": true, "candidate-privacy": true,
 }
 
 // isBoilerplatePath reports whether any path segment names a supporting page.

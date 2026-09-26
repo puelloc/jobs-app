@@ -382,3 +382,40 @@ var (
 	// An inline key="value" cell attribute, i.e. the S&P 400's style="border-color:inherit;".
 	attribute = regexp.MustCompile(`^[A-Za-z-]+="[^"]*"`)
 )
+
+// shareClassGroups groups rows that share one company name, which is how a dual-class listing
+// appears: Alphabet is listed as GOOGL and GOOG on two rows with the same Security name.
+//
+// The comparison key is the same normalisation the companies.slug uses (lowercase; runs of
+// non-alphanumeric characters collapse to a single hyphen; leading and trailing hyphens trimmed),
+// duplicated here deliberately. internal/sp1500 does not import the store, and the collapse is a
+// property of the parsed data that is worth pinning in the package that produces it. If the two
+// ever disagree, this test and the store's slug test fail together, which is the intent.
+func shareClassGroups(r Result) map[string][]Company {
+	groups := map[string][]Company{}
+	for _, c := range r.Companies {
+		key := collapseKey(c.Name)
+		groups[key] = append(groups[key], c)
+	}
+	return groups
+}
+
+// collapseKey normalises a company name to the key share classes are grouped by.
+func collapseKey(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	lastHyphen := false
+	for _, rune := range strings.ToLower(name) {
+		switch {
+		case (rune >= 'a' && rune <= 'z') || (rune >= '0' && rune <= '9'):
+			b.WriteRune(rune)
+			lastHyphen = false
+		default:
+			if !lastHyphen && b.Len() > 0 {
+				b.WriteRune('-')
+				lastHyphen = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
