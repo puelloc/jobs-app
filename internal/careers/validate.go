@@ -211,7 +211,14 @@ func validateHTML(v Verdict, c Candidate, r Response) Verdict {
 			v.Reason = OutcomeUnverifiableATSTitle
 			return v
 		}
-		if !containsCompanyToken(title, c.CompanyName) {
+		// The title alone is not the only evidence. A host that names the company corroborates the
+		// page just as well: boeing.com/company/careers has the title "Careers" and belongs to
+		// Boeing, which is not a generic page however generic its title reads. Requiring the token
+		// in the title rejected it.
+		//
+		// This does not weaken the fake-slug defence, because those hosts name the vendor rather
+		// than the company: jobs.ashbyhq.com/zzzznotrealco999 carries neither token.
+		if !containsCompanyToken(title, c.CompanyName) && !containsCompanyToken(hostOfURL(v.FinalURL), c.CompanyName) {
 			v.Status = StatusRejected
 			v.Reason = OutcomeGenericTitleWithoutCompany
 			return v

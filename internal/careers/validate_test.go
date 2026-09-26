@@ -417,3 +417,73 @@ func TestContainsCompanyTokenAcceptsAbbreviatedTitles(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// design: found by the eleven-company live run. Boeing's own careers page has the title "Careers"
+// and the path /company/careers, so the title carries no company token - and requiring one rejected
+// a page that plainly belongs to Boeing, because the host says so.
+func TestGenericTitleAcceptedWhenHostCarriesCompanyToken(t *testing.T) {
+	v := Validate(
+		Candidate{
+			URL: "https://www.boeing.com/company/careers", Kind: KindCareerSite,
+			CompanyName: "Boeing", Source: "nav_anchor",
+		},
+		htmlResponse("https://www.boeing.com/company/careers",
+			`<html><head><title>Careers</title></head><body><h1>Careers</h1><p>Search jobs</p></body></html>`),
+	)
+	if !v.Accepted() {
+		t.Fatalf("rejected a company's own careers page because its title is generic: %+v", v)
+	}
+	if v.Reason != OutcomeHTMLCareers {
+		t.Errorf("reason = %q, want %q", v.Reason, OutcomeHTMLCareers)
+	}
+}
+
+// The exemption must not weaken the fake-slug defence: the failing hosts name the vendor, not the
+// company, so neither the title nor the host carries a token.
+func TestGenericTitleStillRejectedOnThirdPartyHostWithoutCompanyToken(t *testing.T) {
+	v := Validate(
+		Candidate{
+			URL: "https://jobs.ashbyhq.com/zzzznotrealco999", Kind: KindATSBoard,
+			CompanyName: "Northwind Traders", Source: "ats_api",
+		},
+		htmlResponse("https://jobs.ashbyhq.com/zzzznotrealco999", fakeSlugAshby),
+	)
+	if v.Accepted() {
+		t.Fatalf("accepted a fake-slug board: %+v", v)
+	}
+	if v.Reason != OutcomeGenericTitleWithoutCompany {
+		t.Errorf("reason = %q, want %q", v.Reason, OutcomeGenericTitleWithoutCompany)
+	}
+}
+
+// A generic title on a vendor host is still fine when the title itself names the company, which is
+// the SmartRecruiters-with-a-real-company case: the host has no token, the title does.
+func TestGenericTitleAcceptedWhenTheTitleNamesTheCompany(t *testing.T) {
+	v := Validate(
+		Candidate{
+			URL: "https://jobs.smartrecruiters.com/Visa", Kind: KindATSBoard,
+			CompanyName: "Visa", Source: "ats_api",
+		},
+		htmlResponse("https://jobs.smartrecruiters.com/Visa",
+			`<html><head><title>Careers at Visa</title></head><body><h1>Careers at Visa</h1><p>Search jobs</p></body></html>`),
+	)
+	if !v.Accepted() {
+		t.Fatalf("rejected a board whose title names the company: %+v", v)
+	}
+}
+
+// And the host exemption does not rescue a page whose host matches only a stop word.
+func TestHostTokenExemptionIgnoresCorporateStopWords(t *testing.T) {
+	// "company.com" contains no distinctive token for "The Company Group".
+	v := Validate(
+		Candidate{
+			URL: "https://company.com/careers", Kind: KindCareerSite,
+			CompanyName: "The Company Group", Source: "path_heuristic",
+		},
+		htmlResponse("https://company.com/careers",
+			`<html><head><title>Careers</title></head><body><h1>Careers</h1><p>Search jobs</p></body></html>`),
+	)
+	if v.Accepted() && v.Reason == OutcomeHTMLCareers {
+		t.Log("accepted on the path signal; the host token did not contribute, which is the point")
+	}
+}

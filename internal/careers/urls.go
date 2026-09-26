@@ -65,6 +65,21 @@ func resolveURL(base, candidate string) (string, error) {
 	return resolved.String(), nil
 }
 
+// hostOfURL returns a URL's hostname, or empty when it cannot be parsed.
+//
+// The gate uses it to let a host that names the company corroborate a page whose title does not:
+// boeing.com/company/careers is not generic however generic its "Careers" title reads.
+func hostOfURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := parseURL(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
 // SameHostAs reports whether a URL's host matches a bare hostname, such as the ATS host an accepted
 // candidate redirects to. The wiring uses it to tell "the ladder accepted the board itself" from
 // "the ladder accepted a branded page that redirects to the board", which decide differently when the

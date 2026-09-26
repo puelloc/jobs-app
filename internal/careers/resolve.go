@@ -202,7 +202,7 @@ func (r Resolver) Resolve(ctx context.Context, companyName, homepageURL string) 
 		out.Source = cand.Source
 		out.FinalURL = v.FinalURL
 		out.Title = v.Title
-		if host := hostOf(v.FinalURL); host != "" && !sameSite(v.FinalURL, homepageURL) {
+		if host := hostOfURL(v.FinalURL); host != "" && !sameSite(v.FinalURL, homepageURL) {
 			out.ATSHost = host
 		}
 		return out, nil
@@ -346,7 +346,7 @@ func (r Resolver) fromHomepage(ctx context.Context, companyName, homepageURL str
 		// applicant-tracking host is a board, so it takes the stricter board rules - including
 		// the requirement that the company be verifiable from the page.
 		kind := KindCareerSite
-		if isATSHost(hostOf(a.URL)) {
+		if isATSHost(hostOfURL(a.URL)) {
 			kind = KindATSBoard
 		}
 		res.candidates = append(res.candidates, Candidate{
@@ -396,14 +396,6 @@ func isATSHost(host string) bool {
 		}
 	}
 	return false
-}
-
-func hostOf(raw string) string {
-	u, err := parseURL(raw)
-	if err != nil {
-		return ""
-	}
-	return u.Hostname()
 }
 
 // dedupeCandidates removes repeats by URL, keeping the first occurrence, which is the highest-ranked
