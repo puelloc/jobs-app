@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 // openTest opens a migrated database in a temp dir.
@@ -493,5 +494,336 @@ func TestIndexesExist(t *testing.T) {
 		if !got[name] {
 			t.Errorf("index %s is missing", name)
 		}
+	}
+}
+
+// --- migration runner directives ----------------------------------------
+
+// openRaw opens a DB with the DSN pragmas but without running any migrations, so a test can drive
+// the runner against an FS of its own.
+func openRaw(t *testing.T) *sql.DB {
+	t.Helper()
+	database, err := sql.Open("sqlite", dbDSN(filepath.Join(t.TempDir(), "test.db")))
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
+
+// foreignKeysEnabled reads the per-connection pragma.
+func foreignKeysEnabled(t *testing.T, conn *sql.Conn) bool {
+	t.Helper()
+	var on int
+	if err := conn.QueryRowContext(context.Background(), "PRAGMA foreign_keys").Scan(&on); err != nil {
+		t.Fatalf("PRAGMA foreign_keys: %v", err)
+	}
+	return on == 1
+}
+
+// createSchemaMigrations mirrors what migrate does before applying anything, so a test that calls
+// applyMigration directly has somewhere to record its version.
+func createSchemaMigrations(t *testing.T, conn *sql.Conn) {
+	t.Helper()
+	if _, err := conn.ExecContext(context.Background(), `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL
+)`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+}
+
+// design: rebuilding a parent table requires the FK-off directive, and enforcement must be
+// restored afterwards.
+func TestMigrationCanRebuildParentTableWithForeignKeyChildren(t *testing.T) {
+	database := openRaw(t)
+	ctx := context.Background()
+
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	defer conn.Close()
+
+	// parent has a child FK and a CHECK that the migration must widen.
+	setup := `
+CREATE TABLE parent (id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('a')));
+CREATE TABLE child (
+    id        INTEGER PRIMARY KEY,
+    parent_id INTEGER NOT NULL REFERENCES parent(id)
+);`
+	if _, err := conn.ExecContext(ctx, setup); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	createSchemaMigrations(t, conn)
+	if _, err := conn.ExecContext(ctx, `INSERT INTO parent (id, kind) VALUES (1, 'a')`); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO child (id, parent_id) VALUES (1, 1)`); err != nil {
+		t.Fatalf("seed child: %v", err)
+	}
+
+	// Without the directive this exact body fails: DROP TABLE parent violates child's FK.
+	body := `-- migrate:fk_off
+CREATE TABLE parent_new (
+    id   INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('a','b'))
+);
+INSERT INTO parent_new SELECT * FROM parent;
+DROP TABLE parent;
+ALTER TABLE parent_new RENAME TO parent;`
+	if err := applyMigration(ctx, conn, "900", body); err != nil {
+		t.Fatalf("applyMigration with fk_off: %v", err)
+	}
+
+	// The widened CHECK is now in force.
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		t.Fatalf("fk off for probe: %v", err)
+	}
+	_, insertErr := conn.ExecContext(ctx, `INSERT INTO parent (id, kind) VALUES (2, 'b')`)
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`); err != nil {
+		t.Fatalf("fk on after probe: %v", err)
+	}
+	if insertErr != nil {
+		t.Errorf("widened CHECK rejected 'b': %v", insertErr)
+	}
+
+	// Enforcement was restored, and the directive was recorded.
+	if !foreignKeysEnabled(t, conn) {
+		t.Error("foreign_keys is off after a migration that disabled it")
+	}
+	var applied int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version = '900'`).Scan(&applied); err != nil {
+		t.Fatalf("read schema_migrations: %v", err)
+	}
+	if applied != 1 {
+		t.Errorf("schema_migrations rows for version 900 = %d, want 1", applied)
+	}
+
+	// FK enforcement really is back on, not merely reported as on.
+	if _, err := conn.ExecContext(ctx, `INSERT INTO child (id, parent_id) VALUES (9, 9999)`); err == nil {
+		t.Error("an FK violation was accepted after the migration; foreign_keys is not enforced")
+	}
+}
+
+// design: a migration that leaves a foreign-key violation behind must fail, even though the
+// statements that created the violation ran with enforcement off.
+func TestMigrationRunnerAssertsForeignKeyCheckCleanAfterEveryMigration(t *testing.T) {
+	database := openRaw(t)
+	ctx := context.Background()
+
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `
+CREATE TABLE parent (id INTEGER PRIMARY KEY);
+CREATE TABLE child (
+    id        INTEGER PRIMARY KEY,
+    parent_id INTEGER NOT NULL REFERENCES parent(id)
+);`); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	createSchemaMigrations(t, conn)
+
+	// The dangling child cannot be seeded with enforcement on, which is the point: only a
+	// post-migration check catches it. Seed it the same way the migration itself runs.
+	if err := withForeignKeysOff(ctx, conn, func() error {
+		_, err := conn.ExecContext(ctx, `INSERT INTO child (id, parent_id) VALUES (1, 1)`)
+		return err
+	}); err != nil {
+		t.Fatalf("seed dangling child: %v", err)
+	}
+
+	// Rebuild parent and drop the row child points at, all with enforcement off. The statements
+	// succeed; only the post-migration check can catch the dangling reference.
+	body := `-- migrate:fk_off
+CREATE TABLE parent_new (id INTEGER PRIMARY KEY);
+DROP TABLE parent;
+ALTER TABLE parent_new RENAME TO parent;`
+	err = applyMigration(ctx, conn, "901", body)
+	if err == nil {
+		t.Fatal("applyMigration succeeded with a dangling foreign key, want a foreign_key_check failure")
+	}
+	if !strings.Contains(err.Error(), "foreign key") {
+		t.Errorf("error = %v, want it to mention the foreign key violation", err)
+	}
+}
+
+// design: a connection that disabled foreign keys must get them back even when the migration fails,
+// because db.Open caps the pool at one connection and a stuck-off connection is the only one.
+func TestMigrationRunnerRestoresForeignKeysOnError(t *testing.T) {
+	database := openRaw(t)
+	ctx := context.Background()
+
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE t (id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	body := `-- migrate:fk_off
+CREATE TABLE t (id INTEGER PRIMARY KEY);`
+	if err := applyMigration(ctx, conn, "902", body); err == nil {
+		t.Fatal("applyMigration succeeded despite a failing statement, want an error")
+	}
+
+	if !foreignKeysEnabled(t, conn) {
+		t.Error("foreign_keys is off after a failed migration that disabled it")
+	}
+	err = conn.QueryRowContext(ctx, `SELECT id FROM t`).Scan(new(int))
+	if err != nil && err != sql.ErrNoRows {
+		t.Errorf("connection is unusable after the failed migration: %v", err)
+	}
+}
+
+// design: the FK pragma and the transaction it protects must run on the same connection. Pool size
+// is deliberately raised above one here, so the pragma would land on a different connection than
+// the transaction if the runner acquired them separately.
+func TestMigrationRunnerHoldsSingleConnectionAcrossPragmaAndTransaction(t *testing.T) {
+	database := openRaw(t)
+	database.SetMaxOpenConns(4)
+
+	setup := fstest.MapFS{
+		"900_setup.sql": &fstest.MapFile{Data: []byte(`
+CREATE TABLE parent (id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('a')));
+CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parent(id));
+INSERT INTO parent (id, kind) VALUES (1, 'a');
+INSERT INTO child (id, parent_id) VALUES (1, 1);`)},
+		"901_rebuild.sql": &fstest.MapFile{Data: []byte(`-- migrate:fk_off
+CREATE TABLE parent_new (id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('a','b')));
+INSERT INTO parent_new SELECT * FROM parent;
+DROP TABLE parent;
+ALTER TABLE parent_new RENAME TO parent;`)},
+	}
+
+	if err := migrate(database, setup); err != nil {
+		t.Fatalf("migrate with a pool larger than one: %v", err)
+	}
+
+	var kind string
+	if err := database.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'parent'`).Scan(&kind); err != nil {
+		t.Fatalf("read parent schema: %v", err)
+	}
+	if !strings.Contains(kind, "'b'") {
+		t.Errorf("parent schema = %q, want the widened CHECK from 901_rebuild.sql", kind)
+	}
+}
+
+// design: a migration without the FK directive must actually commit. The rollback defer inside the
+// runner reads the same error variable the transaction sets, so an inner "err :=" would shadow it
+// and roll back a successful migration while still reporting success.
+func TestMigrationRunnerDoesNotDiscardASuccessfulMigration(t *testing.T) {
+	database := openRaw(t)
+	ctx := context.Background()
+
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	defer conn.Close()
+
+	createSchemaMigrations(t, conn)
+
+	// Two ordinary migrations, no directive. The first stands in for applyMigration's own
+	// bookkeeping table; the second must land exactly once.
+	if err := applyMigration(ctx, conn, "910", `CREATE TABLE counter (n INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("applyMigration 910: %v", err)
+	}
+	if err := applyMigration(ctx, conn, "911", `INSERT INTO counter (n) VALUES (1)`); err != nil {
+		t.Fatalf("applyMigration 911: %v", err)
+	}
+
+	var n int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM counter`).Scan(&n); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("counter has %d rows, want 1: the migration was rolled back or run twice", n)
+	}
+
+	var recorded int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version = '911'`).Scan(&recorded); err != nil {
+		t.Fatalf("read schema_migrations: %v", err)
+	}
+	if recorded != 1 {
+		t.Errorf("schema_migrations rows for 911 = %d, want 1", recorded)
+	}
+}
+
+// design: a directive typo must fail loudly rather than run with enforcement on and resurface as an
+// opaque constraint error.
+func TestMigrationRunnerRejectsUnknownDirective(t *testing.T) {
+	database := openRaw(t)
+	ctx := context.Background()
+
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE t (id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	// A near-miss for fk_off. Ignoring it as a comment would run with enforcement on and fail
+	// later with an opaque constraint error, so the runner must refuse it up front.
+	err = applyMigration(ctx, conn, "903", "-- migrate:fk-off\nSELECT 1;")
+	if err == nil {
+		t.Fatal("applyMigration accepted an unknown directive, want an error")
+	}
+	if !strings.Contains(err.Error(), "unknown directive") {
+		t.Errorf("error = %v, want it to name the unknown directive", err)
+	}
+	if !foreignKeysEnabled(t, conn) {
+		t.Error("foreign_keys is off after a rejected directive")
+	}
+}
+
+func TestParseDirectives(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		body       string
+		wantFkOff  bool
+		wantErrSub string
+	}{
+		{"no directives", "SELECT 1;", false, ""},
+		{"plain comments", "-- a comment\n-- another\nSELECT 1;", false, ""},
+		{"fk_off", "-- migrate:fk_off\nSELECT 1;", true, ""},
+		{"fk_off no space", "--migrate:fk_off\nSELECT 1;", true, ""},
+		{"fk_off with spaces", "--   migrate:   fk_off  \nSELECT 1;", true, ""},
+		{"blank lines before", "\n\n-- migrate:fk_off\nSELECT 1;", true, ""},
+		{"directive below a statement is not a directive", "SELECT 1;\n-- migrate:fk_off", false, ""},
+		{"hyphen typo", "-- migrate:fk-off\nSELECT 1;", false, "unknown directive"},
+		{"unknown name", "-- migrate:whatever\nSELECT 1;", false, "unknown directive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseDirectives(tc.body)
+			if tc.wantErrSub != "" {
+				if err == nil {
+					t.Fatalf("parseDirectives = %+v with no error, want an error", got)
+				}
+				if !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error = %v, want it to contain %q", err, tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseDirectives: %v", err)
+			}
+			if got.foreignKeysOff != tc.wantFkOff {
+				t.Errorf("foreignKeysOff = %v, want %v", got.foreignKeysOff, tc.wantFkOff)
+			}
+		})
 	}
 }
