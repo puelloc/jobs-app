@@ -375,12 +375,16 @@ func attemptFrom(c Candidate, r Response, v Verdict) Attempt {
 	}
 }
 
-// atsHosts are the applicant-tracking hosts seen in the recorded redirects. A link to one of these
-// is a board wherever it was found, which matters because a board is held to a stricter standard
-// than a company's own page.
+// atsHosts are the applicant-tracking hosts this pipeline can *read*: a link to one is a board
+// wherever it was found, and a board is held to a stricter standard than a company's own page.
+//
+// SmartRecruiters is deliberately absent even though its boards exist, because there is no tier that
+// can validate them: the public postings API returned byte-identical 200 responses for a real
+// company and a nonexistent one, so a board there cannot be corroborated. Classifying it as a board
+// would let an unvalidated vendor URL be recorded as a known platform.
 var atsHosts = []string{
 	"boards.greenhouse.io", "job-boards.greenhouse.io",
-	"jobs.lever.co", "jobs.ashbyhq.com", "jobs.smartrecruiters.com",
+	"jobs.lever.co", "jobs.ashbyhq.com",
 	"myworkdayjobs.com", "icims.com", "eightfold.ai", "oraclecloud.com",
 	"successfactors.com", "taleo.net", "workable.com", "recruiting.paylocity.com",
 }

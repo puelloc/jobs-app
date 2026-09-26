@@ -389,3 +389,25 @@ func TestATSResolverUsesTheSeam(t *testing.T) {
 		t.Errorf("bound through the seam = %d, want %d", rec.Calls()[0].MaxBodyBytes, ashbyMaxBodyBytes)
 	}
 }
+
+// SmartRecruiters is excluded from the routing tables because no tier can validate a board there:
+// its public postings API answers identically for a real company and a nonexistent one. Classifying
+// it as a board would let an unvalidated vendor URL be recorded as a known platform.
+func TestSmartRecruitersNotInATSHosts(t *testing.T) {
+	if isATSHost("jobs.smartrecruiters.com") || isATSHost("acme.jobs.smartrecruiters.com") {
+		t.Error("jobs.smartrecruiters.com is still classified as an applicant-tracking host, but there is no tier behind it")
+	}
+	// The vendors that do have a tier stay.
+	for _, host := range []string{"boards.greenhouse.io", "jobs.lever.co", "jobs.ashbyhq.com"} {
+		if !isATSHost(host) {
+			t.Errorf("%s is no longer classified as a board host", host)
+		}
+	}
+}
+
+// And the tenant parser, which is what the ATS tier routes on, must not claim it either.
+func TestSmartRecruitersNotATenant(t *testing.T) {
+	if _, _, err := ParseTenant("https://jobs.smartrecruiters.com/Visa"); err == nil {
+		t.Error("ParseTenant accepted a SmartRecruiters URL, which no tier can read")
+	}
+}

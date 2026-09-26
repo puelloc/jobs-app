@@ -223,8 +223,9 @@ func platformIDFor(host string) int64 {
 		return 13
 	case containsHost(host, "ashbyhq.com"):
 		return 14
-	case containsHost(host, "smartrecruiters.com"):
-		return 15
+	// SmartRecruiters (15) is deliberately unmapped: no tier can validate a board there, so
+	// recording the platform would assert an identity nothing checked. The platforms row stays
+	// because it was seeded in 002 and other code may reference it.
 	default:
 		return 0
 	}

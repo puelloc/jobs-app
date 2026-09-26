@@ -575,3 +575,22 @@ func TestNoWorkWritesNoRunRow(t *testing.T) {
 		t.Errorf("scrape_runs rows = %d, want 0", runs)
 	}
 }
+
+// The platform mapper must not claim a vendor with no tier behind it. Recording platform 15 would
+// assert a SmartRecruiters identity that nothing validated.
+func TestSmartRecruitersNotMappedInPlatformIDFor(t *testing.T) {
+	if got := platformIDFor("jobs.smartrecruiters.com"); got != 0 {
+		t.Errorf("platformIDFor(jobs.smartrecruiters.com) = %d, want 0: no tier can validate a board there", got)
+	}
+	if got := platformIDFor("acme.jobs.smartrecruiters.com"); got != 0 {
+		t.Errorf("a per-tenant SmartRecruiters subdomain mapped to %d, want 0", got)
+	}
+	// The mapped vendors keep their ids.
+	for host, want := range map[string]int64{
+		"boards.greenhouse.io": 10, "jobs.lever.co": 11, "jobs.ashbyhq.com": 14,
+	} {
+		if got := platformIDFor(host); got != want {
+			t.Errorf("platformIDFor(%s) = %d, want %d", host, got, want)
+		}
+	}
+}
