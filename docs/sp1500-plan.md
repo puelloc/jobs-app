@@ -50,7 +50,7 @@ remote engineers) is **out of scope for M1/M2** and belongs against the seeded r
 | Milestone | Scope | Status |
 | --- | --- | --- |
 | **M1** | S&P wikitext parser + golden fixtures + `companies` enrichment columns + `platforms` `'reference'` rebuild + migration-runner FK-off support + `scrape_runs`/exit codes | **complete** |
-| **M2a** | Careers ladder tiers 1–4 + `5a` (verified public ATS JSON APIs) + `5c` (SmartRecruiters) | planned |
+| **M2a** | Careers ladder tiers 1–4 + `5a` (verified public ATS JSON APIs) + `5c` (SmartRecruiters) | **in progress** |
 
 ### M1 progress
 
@@ -91,6 +91,42 @@ The no-article row count is **252** (1 / 43 / 208), not the 253 recorded earlier
 
 HTML extraction (M2b) matters more than the ATS API layer (M2a), because the most common
 enterprise ATSs are HTML-only.
+
+### M2a progress
+
+`internal/careers` now holds the resolution machinery, all of it pure and network-free except for
+the `Fetcher` seam:
+
+| Piece | Status |
+| --- | --- |
+| Validation gate (`validate.go`) | done |
+| URL parsing/resolution (`urls.go`) | done |
+| Homepage anchor scan, tier 4 (`anchors.go`) | done |
+| `robots.txt` + `sitemap.xml`, tier 3 (`wellknown.go`) | done |
+| Ladder walk (`resolve.go`) | done |
+| Homepage resolution, tier 1 (Wikidata / infobox / 10-K) | **not started** |
+| ATS JSON fetch, tier 5a | not started — the fingerprint host list exists, the fetching does not |
+| Real HTTP `Fetcher` implementation | not started |
+| Migration `005_url_resolution.sql`, `url_resolution_attempts` writes, `career_site_url` | not started |
+| Command wiring | not started |
+
+Nothing yet fetches a real page or writes a row: the tiers are tested against recorded responses and
+the results are returned, not persisted. That integration is the remaining bulk of M2a.
+
+Implementation notes:
+
+- Hard rejections run **before** the evidence check. Evidence is generous by design — a path
+  containing "careers" counts alone — so `trailhead.salesforce.com/career-path/` matched on title,
+  heading and path at once and was accepted until the specific rule was consulted first.
+- A candidate's `Kind` follows **where the URL points**, not which tier produced it. A navigation
+  link to `jobs.ashbyhq.com` labelled `career_site` bypassed the stricter board rules entirely.
+- A **transport failure is an error state, not a rejection**: an unreachable site is unknown, not
+  disproven, so it stays retryable.
+- A vendor board ranks **below** a company's own page, matching the recorded preference for a
+  branded page over an ATS tenant.
+- `containsCompanyToken` is deliberately permissive when no company name is supplied; callers that
+  need positive corroboration check that separately. On a third-party board an unusable token is its
+  own rejection (`unverifiable_ats_title`), because the title is the whole of the evidence there.
 
 ---
 
