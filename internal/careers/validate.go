@@ -445,6 +445,11 @@ var corporateStopWords = map[string]bool{
 	"brands": true, "products": true, "enterprises": true, "partners": true, "trust": true, "fund": true,
 }
 
+// DistinctiveToken exposes the gate's company-token helper so other tiers select and verify hosts the
+// same way the gate does. Exported rather than duplicated: the plan requires the homepage heuristic
+// and the validation gate to agree on what "names the company" means, and two copies would drift.
+func DistinctiveToken(company string) string { return distinctiveToken(company) }
+
 // distinctiveToken returns the longest word of at least three characters in a company name that is
 // not a corporate stop word, lowercased. It returns "" when the name has no such word, which is the
 // case for names like "3M" and "AT&T" that are entirely initials or digits.
