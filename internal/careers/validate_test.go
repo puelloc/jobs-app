@@ -5,7 +5,10 @@
 // No test touches the network.
 package careers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // fakeSlugAshby is what jobs.ashbyhq.com serves for a company that does not exist: HTTP 200 with a
 // generic title and no jobs. A status-only gate accepts this.
@@ -485,5 +488,85 @@ func TestHostTokenExemptionIgnoresCorporateStopWords(t *testing.T) {
 	)
 	if v.Accepted() && v.Reason == OutcomeHTMLCareers {
 		t.Log("accepted on the path signal; the host token did not contribute, which is the point")
+	}
+}
+
+// design: found by the eleven-company live run. Salesforce's careers page was stored with ?bc=HL, so
+// a later run would see the same page as a different candidate.
+func TestTrackingParamsStrippedOnAccept(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"salesforce bc", "https://www.salesforce.com/company/careers/?bc=HL", "https://www.salesforce.com/company/careers/"},
+		{"utm set", "https://example.com/careers?utm_source=x&utm_medium=y&utm_campaign=z", "https://example.com/careers"},
+		{"boeing campaign", "https://jobs.boeing.com/?utm_source=boeing.com&utm_medium=careerslink", "https://jobs.boeing.com/"},
+		{"mailchimp", "https://example.com/careers?mc_cid=1&mc_eid=2", "https://example.com/careers"},
+		{"ad click ids", "https://example.com/careers?gclid=a&fbclid=b&msclkid=c&yclid=d", "https://example.com/careers"},
+		{"analytics", "https://example.com/careers?_ga=1&_gl=2&_hsenc=3&_hsmi=4", "https://example.com/careers"},
+		{"ref and source", "https://example.com/careers?ref=nav&source=footer", "https://example.com/careers"},
+		{"fragment dropped", "https://example.com/careers#open-roles", "https://example.com/careers"},
+		{"tracking plus unknown keeps the unknown", "https://example.com/careers?bc=HL&tenant=xyz", "https://example.com/careers?tenant=xyz"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormaliseURL(tc.in)
+			if got != tc.want {
+				t.Errorf("NormaliseURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// A parameter this code does not recognise may be load-bearing, so it survives. Dropping it would
+// store a URL that does not resolve to the page that was validated.
+func TestUnknownParamsPreservedOnAccept(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"https://example.com/careers?tenant=xyz", "https://example.com/careers?tenant=xyz"},
+		{"https://example.com/careers?gh_jid=12345", "https://example.com/careers?gh_jid=12345"},
+		{"https://example.com/careers?lang=en", "https://example.com/careers?lang=en"},
+		{"https://example.com/careers?a=1&b=2", "https://example.com/careers?a=1&b=2"},
+	} {
+		if got := NormaliseURL(tc.in); got != tc.want {
+			t.Errorf("NormaliseURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The accepted verdict is what gets stored, so the normalisation has to be visible there and not
+// only in the helper.
+func TestAcceptedVerdictCarriesTheNormalisedURL(t *testing.T) {
+	v := Validate(
+		Candidate{
+			URL: "https://www.salesforce.com/company/careers/?bc=HL", Kind: KindCareerSite,
+			CompanyName: "Salesforce", Source: "nav_anchor",
+		},
+		htmlResponse("https://www.salesforce.com/company/careers/?bc=HL", salesforceReal),
+	)
+	if !v.Accepted() {
+		t.Fatalf("not accepted: %+v", v)
+	}
+	if strings.Contains(v.FinalURL, "bc=") {
+		t.Errorf("FinalURL = %q, want the tracking parameter stripped before storage", v.FinalURL)
+	}
+	if v.FinalURL != "https://www.salesforce.com/company/careers/" {
+		t.Errorf("FinalURL = %q", v.FinalURL)
+	}
+}
+
+// Normalising twice must not change the answer, or a re-run would keep rewriting the stored value.
+func TestNormaliseURLIsIdempotent(t *testing.T) {
+	for _, in := range []string{
+		"https://www.salesforce.com/company/careers/?bc=HL",
+		"https://jobs.boeing.com/?utm_source=x&tenant=y",
+		"https://example.com/careers",
+		"https://example.com/careers?a=1&b=2",
+	} {
+		once := NormaliseURL(in)
+		twice := NormaliseURL(once)
+		if once != twice {
+			t.Errorf("NormaliseURL is not idempotent for %q: %q then %q", in, once, twice)
+		}
 	}
 }

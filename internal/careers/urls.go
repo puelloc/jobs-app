@@ -120,3 +120,54 @@ func lastTwoLabels(host string) string {
 	}
 	return strings.Join(labels[len(labels)-2:], ".")
 }
+
+// trackingParams are query parameters that identify a campaign or referrer rather than a resource.
+//
+// They are stripped from an accepted URL before it is stored, because two spellings of one page look
+// like two candidates on a later run: the eleven-company live run stored Salesforce's careers page as
+// /company/careers/?bc=HL, which would not have matched the same page without the parameter.
+//
+// The strip happens at accept time, not at fetch time: the fetch must use exactly the href the page
+// published, or a site that needs the parameter to serve the page would break.
+var trackingParams = map[string]bool{
+	"bc": true, "ref": true, "source": true,
+	"fbclid": true, "gclid": true, "yclid": true, "msclkid": true,
+	"_ga": true, "_gl": true, "_hsenc": true, "_hsmi": true,
+}
+
+// isTrackingParam reports whether a query parameter is a tracking parameter. Prefix families cover
+// the ones that are namespaced rather than fixed, such as utm_source and mc_cid.
+func isTrackingParam(name string) bool {
+	lower := strings.ToLower(name)
+	if trackingParams[lower] {
+		return true
+	}
+	return strings.HasPrefix(lower, "utm_") || strings.HasPrefix(lower, "mc_")
+}
+
+// NormaliseURL returns the canonical form of a URL for storage: the fragment removed and campaign
+// parameters dropped, with everything else - including unknown parameters - preserved.
+//
+// Unknown parameters are deliberately kept. A parameter this code does not recognise may be
+// load-bearing, such as a tenant identifier, and dropping it would store a URL that does not resolve
+// to the page that was actually validated.
+func NormaliseURL(raw string) string {
+	u, err := parseURL(raw)
+	if err != nil {
+		return raw
+	}
+	u.Fragment = ""
+	if u.RawQuery == "" {
+		return u.String()
+	}
+
+	values := u.Query()
+	for name := range values {
+		if isTrackingParam(name) {
+			values.Del(name)
+		}
+	}
+	// Encode sorts by key, so the result is stable across runs and two spellings converge.
+	u.RawQuery = values.Encode()
+	return u.String()
+}

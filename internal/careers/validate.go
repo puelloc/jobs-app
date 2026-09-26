@@ -136,7 +136,10 @@ func Validate(c Candidate, r Response) Verdict {
 	if final == "" {
 		final = resolved
 	}
-	v := Verdict{FinalURL: final}
+	// The stored value is the canonical form. Normalising here rather than at fetch time keeps the
+	// request byte-identical to the published href while making two spellings of one page compare
+	// equal on a later run.
+	v := Verdict{FinalURL: NormaliseURL(final)}
 
 	// A redirect target that cannot be parsed is a red flag: the stored URL would be unusable.
 	if _, err := parseURL(final); err != nil {
