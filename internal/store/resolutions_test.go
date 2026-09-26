@@ -67,7 +67,7 @@ func rejectedAttempt(url string, reason careers.Reason) ResolutionAttempt {
 // that set and nothing else.
 func TestRejectionReasonRoundTripsEveryOutcomeValue(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	ctx := context.Background()
 	runID := resolutionTestRun(t, database)
 	seedCompany(t, database, 1, "acme")
@@ -124,7 +124,7 @@ func TestRejectionReasonRoundTripsEveryOutcomeValue(t *testing.T) {
 // An undeclared reason must stop the write rather than becoming a string nobody can query.
 func TestUndeclaredRejectionReasonIsRefused(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	runID := resolutionTestRun(t, database)
 	seedCompany(t, database, 1, "acme")
 
@@ -150,7 +150,7 @@ func TestUndeclaredRejectionReasonIsRefused(t *testing.T) {
 
 func TestSourceEnumRoundTripsEveryValue(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	ctx := context.Background()
 	runID := resolutionTestRun(t, database)
 
@@ -212,7 +212,7 @@ func TestSourceEnumRoundTripsEveryValue(t *testing.T) {
 // gets an error naming the company rather than a rollback mid-run.
 func TestUndeclaredSourceIsRefused(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	runID := resolutionTestRun(t, database)
 	seedCompany(t, database, 1, "acme")
 
@@ -273,7 +273,7 @@ VALUES (1, 'nav_anchor', 'https://x/', 'career_site', 'rejected', NULL)`)
 
 func TestAcceptedAttemptHasNullRejectionReason(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	runID := resolutionTestRun(t, database)
 	seedCompany(t, database, 1, "acme")
 
@@ -298,7 +298,7 @@ func TestAcceptedAttemptHasNullRejectionReason(t *testing.T) {
 
 func TestRejectedAttemptHasNonNullRejectionReason(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	runID := resolutionTestRun(t, database)
 	seedCompany(t, database, 1, "acme")
 
@@ -323,7 +323,7 @@ func TestRejectedAttemptHasNonNullRejectionReason(t *testing.T) {
 // Every attempt is recorded, accepted or not. A trail of only the winners cannot explain a bad pick.
 func TestAttemptsWrittenForRejectedCandidatesToo(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	runID := resolutionTestRun(t, database)
 	seedCompany(t, database, 1, "acme")
 
@@ -360,7 +360,7 @@ func TestAttemptsWrittenForRejectedCandidatesToo(t *testing.T) {
 // kill leaves behind as evidence.
 func TestRunRowWrittenBeforeAnyAttempt(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	runID := resolutionTestRun(t, database)
 	seedCompany(t, database, 1, "acme")
 
@@ -391,7 +391,7 @@ func TestRunRowWrittenBeforeAnyAttempt(t *testing.T) {
 // The counters mean what section 4.3 says they mean, so a later reader does not have to guess.
 func TestRunCountersMatchDefinition(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	ctx := context.Background()
 	runID := resolutionTestRun(t, database)
 
@@ -462,7 +462,7 @@ func TestRunCountersMatchDefinition(t *testing.T) {
 // would make a 1,500-company pass unusable.
 func TestFailedCompanyTransactionDoesNotAbortRun(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	ctx := context.Background()
 	runID := resolutionTestRun(t, database)
 	seedCompany(t, database, 1, "good")
@@ -519,7 +519,7 @@ func TestFailedCompanyTransactionDoesNotAbortRun(t *testing.T) {
 // The application-system invariant has its own test because SQLite cannot declare it.
 func TestInvariantApplicationSystemPlatformEnforced(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	runID := resolutionTestRun(t, database)
 	seedCompany(t, database, 1, "acme")
 
@@ -601,7 +601,7 @@ func TestEvidencePathIsSafeForUntrustedParts(t *testing.T) {
 // The same run slot must not be written twice; that is a writer bug, not a rerun.
 func TestSameRunSameAttemptIndexCollides(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	ctx := context.Background()
 	runID := resolutionTestRun(t, database)
 	seedCompany(t, database, 1, "acme")
@@ -657,7 +657,7 @@ func TestWriteEvidenceCreatesDirectoriesAndStoresBytes(t *testing.T) {
 // concurrently while a single writer consumes, and every company's rows must land whole.
 func TestWriterSerializesConcurrentResults(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	runID := resolutionTestRun(t, database)
 
 	const companies = 8
@@ -740,7 +740,7 @@ SELECT
 // companies table untouched: the whole point is to see what would happen without it happening.
 func TestDryRunWritesAttemptsWithDryRunRun(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	ctx := context.Background()
 
 	runID, _, err := StartDryRun(ctx, database, 23)
@@ -783,7 +783,7 @@ func TestDryRunWritesAttemptsWithDryRunRun(t *testing.T) {
 // Production reporting sees only real runs. This is the filter obligation the migration records.
 func TestProductionQueriesFilterDryRun(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	ctx := context.Background()
 	seedCompany(t, database, 1, "acme")
 
@@ -832,7 +832,7 @@ SELECT count(*)
 // A dry run must not touch the company row, so a pre-flight pass is genuinely non-destructive.
 func TestDryRunLeavesCompanyUnchanged(t *testing.T) {
 	database := newTestDB(t)
-	writer := NewResolutionWriter(database)
+	writer := NewResolutionWriter(database, "")
 	ctx := context.Background()
 	runID, _, err := StartDryRun(ctx, database, 23)
 	if err != nil {

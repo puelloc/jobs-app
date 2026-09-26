@@ -65,6 +65,21 @@ func resolveURL(base, candidate string) (string, error) {
 	return resolved.String(), nil
 }
 
+// SameHostAs reports whether a URL's host matches a bare hostname, such as the ATS host an accepted
+// candidate redirects to. The wiring uses it to tell "the ladder accepted the board itself" from
+// "the ladder accepted a branded page that redirects to the board", which decide differently when the
+// board's API then refuses.
+func SameHostAs(rawURL, host string) bool {
+	if rawURL == "" || host == "" {
+		return false
+	}
+	u, err := parseURL(rawURL)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), host)
+}
+
 // sameSite reports whether two URLs share a registrable-ish host, comparing the last two labels.
 //
 // The comparison is deliberately coarse. It is used to keep an anchor scan on the company's own

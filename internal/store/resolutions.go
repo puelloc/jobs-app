@@ -16,6 +16,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,15 @@ type ResolutionAttempt struct {
 	// EvidencePath points at the stored response body that produced the decision. Empty when the
 	// body was not retained, which is allowed: a transport failure has no body.
 	EvidencePath string
+	// Evidence is a short parsed summary kept in the row itself, such as a JobPosting count. It is
+	// the part worth querying without opening the file.
+	Evidence string
+	// Body is the response that produced the decision, written to EvidencePath by the writer. It is
+	// held in memory rather than written by the caller because the writer is the only component that
+	// knows the attempt index, and the index is part of the path.
+	Body []byte
+	// ContentType decides the evidence file's extension.
+	ContentType string
 }
 
 // Resolution is one company's outcome for a run.
@@ -92,10 +102,15 @@ type WriteResult struct {
 // ResolutionWriter persists resolutions. A single instance is used from one goroutine.
 type ResolutionWriter struct {
 	db *sql.DB
+	// dataDir is the root for evidence files. Empty disables evidence retention, which is what the
+	// persistence tests that do not care about the files use.
+	dataDir string
 }
 
-// NewResolutionWriter returns a writer over db.
-func NewResolutionWriter(db *sql.DB) *ResolutionWriter { return &ResolutionWriter{db: db} }
+// NewResolutionWriter returns a writer over db, retaining evidence under dataDir.
+func NewResolutionWriter(db *sql.DB, dataDir string) *ResolutionWriter {
+	return &ResolutionWriter{db: db, dataDir: dataDir}
+}
 
 // Write persists one company's resolution in a single transaction.
 //
@@ -129,7 +144,19 @@ func (w *ResolutionWriter) Write(ctx context.Context, runID int64, firstAttemptI
 	}
 
 	for i, a := range res.Attempts {
-		if err := insertAttempt(ctx, tx, runID, res.CompanyID, firstAttemptIndex+i, a); err != nil {
+		index := firstAttemptIndex + i
+		// Evidence is written before the row that names it, so a row never points at a file that
+		// does not exist. A path collision is reported rather than overwritten: the path is keyed by
+		// run and index, so a collision means this run wrote the slot twice.
+		if len(a.Body) > 0 && w.dataDir != "" && a.EvidencePath == "" {
+			path := EvidencePath(w.dataDir, res.CompanySlug, runID, index, hostOfURL(a.CandidateURL), extensionFor(a.ContentType))
+			written, err := WriteEvidence(path, a.Body)
+			if err != nil {
+				return out, err
+			}
+			a.EvidencePath = written
+		}
+		if err := insertAttempt(ctx, tx, runID, res.CompanyID, index, a); err != nil {
 			return out, err
 		}
 		out.AttemptsInserted++
@@ -359,6 +386,26 @@ func WriteEvidence(path string, body []byte) (string, error) {
 		return path, fmt.Errorf("write evidence %s: %w", path, err)
 	}
 	return path, nil
+}
+
+// hostOfURL returns the host of a URL, or empty when it cannot be parsed.
+func hostOfURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// extensionFor picks the evidence file's extension from its content type.
+func extensionFor(contentType string) string {
+	if strings.Contains(strings.ToLower(contentType), "json") {
+		return "json"
+	}
+	return "html"
 }
 
 // safePathPart reduces a host or slug to characters that are safe in a single path element.

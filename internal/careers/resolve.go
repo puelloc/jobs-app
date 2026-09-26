@@ -114,6 +114,12 @@ type Attempt struct {
 	ValidationState ValidationStatus
 	RejectionReason Reason
 	Evidence        string
+	// Body is the response that produced the decision, kept so the caller can retain it as
+	// evidence. The ladder does no I/O, so writing it is the caller's job - but the ladder is the
+	// only place that has the bytes alongside the attempt they belong to.
+	Body []byte
+	// ContentType decides the evidence file's extension.
+	ContentType string
 }
 
 // Outcome is what resolution concluded for one company.
@@ -364,6 +370,8 @@ func attemptFrom(c Candidate, r Response, v Verdict) Attempt {
 		ValidationState: v.Status,
 		RejectionReason: v.Reason,
 		Evidence:        v.Evidence,
+		Body:            r.Body,
+		ContentType:     r.ContentType,
 	}
 }
 
