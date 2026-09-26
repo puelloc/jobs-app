@@ -92,3 +92,40 @@ UPDATE scrape_runs
 	}
 	return nil
 }
+
+// StartDryRun inserts a run row marked dry_run = 1.
+//
+// A dry run records its attempts like any other run - that is the point of a pre-flight pass, since
+// counters without the rows behind them cannot be inspected - and the flag is how those rows stay
+// out of production reporting. It shares StartRun's ordering guarantee: the row is committed before
+// anything is fetched.
+func StartDryRun(ctx context.Context, db *sql.DB, platformID int64) (int64, time.Time, error) {
+	const q = `
+INSERT INTO scrape_runs (platform_id, started_at, status, dry_run)
+VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'running', 1)
+RETURNING id, started_at`
+
+	var (
+		id        int64
+		startedAt string
+	)
+	if err := db.QueryRowContext(ctx, q, platformID).Scan(&id, &startedAt); err != nil {
+		return 0, time.Time{}, fmt.Errorf("insert dry scrape_runs: %w", err)
+	}
+	ts, err := time.Parse(time.RFC3339, startedAt)
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("parse started_at %q returned by the database: %w", startedAt, err)
+	}
+	return id, ts, nil
+}
+
+// IsDryRun reports whether a run is a dry run. Reporting queries use it to exclude dry-run attempts
+// from production figures.
+func IsDryRun(ctx context.Context, db *sql.DB, runID int64) (bool, error) {
+	var dry int
+	if err := db.QueryRowContext(ctx,
+		`SELECT dry_run FROM scrape_runs WHERE id = ?`, runID).Scan(&dry); err != nil {
+		return false, fmt.Errorf("read dry_run for run %d: %w", runID, err)
+	}
+	return dry == 1, nil
+}

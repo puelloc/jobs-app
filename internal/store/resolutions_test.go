@@ -733,3 +733,141 @@ SELECT
 		}
 	}
 }
+
+// --- dry runs -------------------------------------------------------------
+
+// A dry run records its attempts, because that is what makes it inspectable, but it must leave the
+// companies table untouched: the whole point is to see what would happen without it happening.
+func TestDryRunWritesAttemptsWithDryRunRun(t *testing.T) {
+	database := newTestDB(t)
+	writer := NewResolutionWriter(database)
+	ctx := context.Background()
+
+	runID, _, err := StartDryRun(ctx, database, 23)
+	if err != nil {
+		t.Fatalf("StartDryRun: %v", err)
+	}
+	seedCompany(t, database, 1, "acme")
+
+	dry, err := IsDryRun(ctx, database, runID)
+	if err != nil {
+		t.Fatalf("IsDryRun: %v", err)
+	}
+	if !dry {
+		t.Error("the run row was not marked dry_run = 1")
+	}
+
+	// Attempts are written normally; DryRun suppresses the companies update.
+	if _, err := writer.Write(ctx, runID, 0, Resolution{
+		CompanyID: 1, CompanySlug: "acme", DryRun: true,
+		CareerSiteURL: "https://acme.example.com/careers", CareerSiteSource: CareerSiteSourceAnchorScan,
+		ATSPlatformID: 10, ATSBaseURL: "https://boards.greenhouse.io/acme",
+		Attempts: []ResolutionAttempt{
+			rejectedAttempt("https://acme.example.com/about", careers.OutcomeNoCareersSignal),
+			acceptedAttempt("https://acme.example.com/careers"),
+		},
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	var attempts int
+	if err := database.QueryRow(
+		`SELECT count(*) FROM url_resolution_attempts WHERE run_id = ?`, runID).Scan(&attempts); err != nil {
+		t.Fatalf("count attempts: %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("dry-run attempt rows = %d, want 2", attempts)
+	}
+}
+
+// Production reporting sees only real runs. This is the filter obligation the migration records.
+func TestProductionQueriesFilterDryRun(t *testing.T) {
+	database := newTestDB(t)
+	writer := NewResolutionWriter(database)
+	ctx := context.Background()
+	seedCompany(t, database, 1, "acme")
+
+	dryID, _, err := StartDryRun(ctx, database, 23)
+	if err != nil {
+		t.Fatalf("StartDryRun: %v", err)
+	}
+	if _, err := writer.Write(ctx, dryID, 0, Resolution{
+		CompanyID: 1, CompanySlug: "acme", DryRun: true,
+		Attempts: []ResolutionAttempt{rejectedAttempt("https://acme.example.com/", careers.OutcomeForbidden)},
+	}); err != nil {
+		t.Fatalf("dry Write: %v", err)
+	}
+
+	realID := resolutionTestRun(t, database)
+	if _, err := writer.Write(ctx, realID, 0, Resolution{
+		CompanyID: 1, CompanySlug: "acme",
+		CareerSiteURL: "https://acme.example.com/careers", CareerSiteSource: CareerSiteSourceAnchorScan,
+		Attempts: []ResolutionAttempt{rejectedAttempt("https://acme.example.com/x", careers.OutcomeBotChallenge)},
+	}); err != nil {
+		t.Fatalf("real Write: %v", err)
+	}
+
+	// The reporting view: attempts belonging to runs that are not dry runs.
+	var production int
+	if err := database.QueryRow(`
+SELECT count(*)
+  FROM url_resolution_attempts a
+  JOIN scrape_runs r ON r.id = a.run_id
+ WHERE r.dry_run = 0`).Scan(&production); err != nil {
+		t.Fatalf("count production attempts: %v", err)
+	}
+	if production != 1 {
+		t.Errorf("production attempts = %d, want 1 (the dry run's attempt must be excluded)", production)
+	}
+
+	var all int
+	if err := database.QueryRow(`SELECT count(*) FROM url_resolution_attempts`).Scan(&all); err != nil {
+		t.Fatalf("count all attempts: %v", err)
+	}
+	if all != 2 {
+		t.Errorf("total attempts = %d, want 2: the dry run's row is still recorded", all)
+	}
+}
+
+// A dry run must not touch the company row, so a pre-flight pass is genuinely non-destructive.
+func TestDryRunLeavesCompanyUnchanged(t *testing.T) {
+	database := newTestDB(t)
+	writer := NewResolutionWriter(database)
+	ctx := context.Background()
+	runID, _, err := StartDryRun(ctx, database, 23)
+	if err != nil {
+		t.Fatalf("StartDryRun: %v", err)
+	}
+	seedCompany(t, database, 1, "acme")
+
+	if _, err := writer.Write(ctx, runID, 0, Resolution{
+		CompanyID: 1, CompanySlug: "acme", DryRun: true,
+		Attempts: []ResolutionAttempt{acceptedAttempt("https://acme.example.com/careers")},
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	var url, source, checked any
+	if err := database.QueryRow(
+		`SELECT career_site_url, career_site_url_source, career_site_url_checked_at FROM companies WHERE id = 1`).
+		Scan(&url, &source, &checked); err != nil {
+		t.Fatalf("read company: %v", err)
+	}
+	if url != nil {
+		t.Errorf("career_site_url = %v, want NULL after a dry run", url)
+	}
+	if source != nil {
+		t.Errorf("career_site_url_source = %v, want NULL after a dry run", source)
+	}
+	if checked != nil {
+		t.Errorf("career_site_url_checked_at = %v, want NULL after a dry run", checked)
+	}
+
+	var platforms int
+	if err := database.QueryRow(`SELECT count(*) FROM company_application_platforms`).Scan(&platforms); err != nil {
+		t.Fatalf("count platforms: %v", err)
+	}
+	if platforms != 0 {
+		t.Errorf("company_application_platforms rows = %d, want 0 after a dry run", platforms)
+	}
+}

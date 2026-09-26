@@ -68,6 +68,11 @@ type Resolution struct {
 	ATSPlatformID int64
 	ATSBaseURL    string
 
+	// DryRun suppresses every write to the companies table and to company_application_platforms,
+	// while still recording the attempt rows. A pre-flight pass has to be non-destructive to be
+	// worth running against real data, but its attempts are the whole reason to run it.
+	DryRun bool
+
 	Attempts []ResolutionAttempt
 }
 
@@ -113,11 +118,14 @@ func (w *ResolutionWriter) Write(ctx context.Context, runID int64, firstAttemptI
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Read the previous value before writing so the caller can tell an insert from an update.
+	// Read the previous value before writing so the caller can tell an insert from an update. A dry
+	// run changes nothing, so every count stays false and the read would be pointless.
 	var previous sql.NullString
-	if err := tx.QueryRowContext(ctx,
-		`SELECT career_site_url FROM companies WHERE id = ?`, res.CompanyID).Scan(&previous); err != nil {
-		return out, fmt.Errorf("read career_site_url for %s: %w", res.CompanySlug, err)
+	if !res.DryRun {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT career_site_url FROM companies WHERE id = ?`, res.CompanyID).Scan(&previous); err != nil {
+			return out, fmt.Errorf("read career_site_url for %s: %w", res.CompanySlug, err)
+		}
 	}
 
 	for i, a := range res.Attempts {
@@ -127,13 +135,14 @@ func (w *ResolutionWriter) Write(ctx context.Context, runID int64, firstAttemptI
 		out.AttemptsInserted++
 	}
 
-	if err := updateCompanyResolution(ctx, tx, res); err != nil {
-		return out, err
-	}
-
-	if res.ATSPlatformID != 0 {
-		if err := upsertApplicationPlatform(ctx, tx, res); err != nil {
+	if !res.DryRun {
+		if err := updateCompanyResolution(ctx, tx, res); err != nil {
 			return out, err
+		}
+		if res.ATSPlatformID != 0 {
+			if err := upsertApplicationPlatform(ctx, tx, res); err != nil {
+				return out, err
+			}
 		}
 	}
 
@@ -142,6 +151,8 @@ func (w *ResolutionWriter) Write(ctx context.Context, runID int64, firstAttemptI
 	}
 
 	switch {
+	case res.DryRun:
+		// Nothing changed, so nothing is counted as changed.
 	case res.Resolved() && !previous.Valid:
 		out.CareerSiteInserted = true
 	case res.Resolved() && previous.Valid && previous.String != res.CareerSiteURL:
