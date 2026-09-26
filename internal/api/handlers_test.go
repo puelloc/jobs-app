@@ -8,6 +8,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -639,4 +640,16 @@ func difference(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// newTestServerAndDB is newTestServer plus the pool, for tests that need to seed rows directly
+// rather than going through a pipeline.
+func newTestServerAndDB(t *testing.T) (http.Handler, *sql.DB) {
+	t.Helper()
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return NewRouter(database), database
 }
