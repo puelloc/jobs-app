@@ -105,9 +105,13 @@ func TestTargetsAreDistinctAndPinnedToTheSeededPlatformIDs(t *testing.T) {
 		if target.source == "" {
 			t.Errorf("index %s has an empty source name", target.index)
 		}
-		// targets hold paths; baseURL() supplies the host.
-		if !strings.HasPrefix(target.url, "/wiki/List_of_S%26P") {
+		// targets hold paths; baseURL() supplies the host. The path must request wikitext, because
+		// the parser cannot read the rendered article.
+		if !strings.Contains(target.url, "List_of_S%26P") {
 			t.Errorf("index %s path = %q, want the S%%26P constituent list", target.index, target.url)
+		}
+		if !strings.Contains(target.url, "action=raw") {
+			t.Errorf("index %s path = %q, want action=raw: the parser reads wikitext, and the rendered article is HTML", target.index, target.url)
 		}
 	}
 	if len(targets) != 3 {
@@ -126,16 +130,22 @@ func TestTargetsAreDistinctAndPinnedToTheSeededPlatformIDs(t *testing.T) {
 // all three targets - against a local server serving the recorded pages. No test here touches the
 // network: the fixtures are the same bytes the parser's own tests use.
 func TestRunEndToEndAgainstLocalPages(t *testing.T) {
-	pages := map[string]string{
-		"/wiki/List_of_S%26P_500_companies": "sp500.wiki",
-		"/wiki/List_of_S%26P_400_companies": "sp400.wiki",
-		"/wiki/List_of_S%26P_600_companies": "sp600.wiki",
+	// The stub must serve the paths the command actually requests, or it would 404 and the test
+	// would pass for the wrong reason - which is how the rendered-vs-raw URL bug survived this test.
+	byIndex := map[string]string{"sp500": "sp500.wiki", "sp400": "sp400.wiki", "sp600": "sp600.wiki"}
+	pages := map[string]string{}
+	for _, target := range targets {
+		pages[target.url] = byIndex[string(target.index)]
 	}
 	requested := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Match on the escaped path: the client percent-encodes "&" as %26, and URL.Path has
-		// already decoded it by the time the handler sees it.
+		// Match on path plus query: the targets carry ?action=raw, and EscapedPath drops the query
+		// entirely. The client percent-encodes "&" as %26, which EscapedPath preserves and
+		// URL.Path has already decoded by the time the handler sees it.
 		escaped := r.URL.EscapedPath()
+		if r.URL.RawQuery != "" {
+			escaped += "?" + r.URL.RawQuery
+		}
 		requested[escaped]++
 		name, ok := pages[escaped]
 		if !ok {

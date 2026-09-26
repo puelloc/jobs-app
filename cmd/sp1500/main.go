@@ -35,10 +35,15 @@ type indexTarget struct {
 }
 
 // The platform ids are the reference rows seeded by migration 004.
+//
+// The paths use action=raw because the parser reads wikitext, not the rendered article. The plain
+// /wiki/ URL returns HTML: the same page is 570KB of HTML and 87KB of wikitext, and the parser
+// reports "no table found" on the former. This went unnoticed because the end-to-end test served
+// captured raw fixtures, so the command's own URLs were never exercised until the first live run.
 var targets = []indexTarget{
-	{sp1500.SP500, 20, "wikipedia_sp500", "/wiki/List_of_S%26P_500_companies"},
-	{sp1500.SP400, 21, "wikipedia_sp400", "/wiki/List_of_S%26P_400_companies"},
-	{sp1500.SP600, 22, "wikipedia_sp600", "/wiki/List_of_S%26P_600_companies"},
+	{sp1500.SP500, 20, "wikipedia_sp500", "/w/index.php?title=List_of_S%26P_500_companies&action=raw"},
+	{sp1500.SP400, 21, "wikipedia_sp400", "/w/index.php?title=List_of_S%26P_400_companies&action=raw"},
+	{sp1500.SP600, 22, "wikipedia_sp600", "/w/index.php?title=List_of_S%26P_600_companies&action=raw"},
 }
 
 // defaultBaseURL is Wikipedia's host. SP1500_BASE_URL overrides it, which keeps the command's own
