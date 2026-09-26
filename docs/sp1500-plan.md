@@ -921,7 +921,19 @@ audit is to grep for any `select` that has a `ctx.Done()` arm alongside a case t
 (`chan <-`, a non-blocking receive); each needs an explicit `ctx.Err()` first.
 `TestCancelledContextNeverAcquiresASlot` loops 200 times, because one iteration proves nothing.
 
-**4. A test fake whose contract diverges from the real implementation.** `fakeClock.Sleep` returned
+**4. Silent aggregation.** A per-item error folded into a summary counter, with no way to see which
+items failed or why. The resolution run reported a bare zero while the writer was refusing *every*
+resolution, because accepted attempts carried a `rejection_reason` the table's CHECK forbids - so a
+run that failed on everything and a run that found nothing were the same observation. `Failed` and
+`FirstError` on the summary are the fix, and naming the first failure is what made the cause legible
+in one line.
+
+The rule: for any loop that accumulates counters, confirm there is a field or channel that surfaces
+the first error, and that the summary distinguishes "zero results" from "all items errored". The exit
+code is where that distinction has to survive: exit 4 is "considered companies and accepted nothing",
+exit 1 is "errored", and deriving the code from the accepted count alone collapses them.
+
+**5. A test fake whose contract diverges from the real implementation.** `fakeClock.Sleep` returned
 `nil` unconditionally, modelling a sleep that ignores cancellation - the opposite of the real
 `sleepContext`. It did not merely fail to catch the race above; it *masked* it, because the retry
 loop appeared to continue past a cancelled context.
