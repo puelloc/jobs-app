@@ -104,9 +104,10 @@ the `Fetcher` seam:
 | Homepage anchor scan, tier 4 (`anchors.go`) | done |
 | `robots.txt` + `sitemap.xml`, tier 3 (`wellknown.go`) | done |
 | Ladder walk (`resolve.go`) | done |
-| Homepage resolution, tier 1 (Wikidata / infobox / 10-K) | **not started** |
+| Homepage resolution, tier 1 (infobox / Wikidata) | **not started** |
 | ATS JSON fetch, tier 5a | not started — the fingerprint host list exists, the fetching does not |
-| Real HTTP `Fetcher` implementation | not started |
+| Real HTTP `Fetcher` implementation (`internal/httpfetch`) | done |
+| Rate limiter: per-host 1, global 4, 500ms floor, retry policy | done |
 | Migration `005_url_resolution.sql`, `url_resolution_attempts` writes, `career_site_url` | not started |
 | Command wiring | not started |
 
@@ -134,6 +135,18 @@ Implementation notes:
   (Fox Corporation, News Corp, Alphabet Inc., Under Armour) so a fifth pair appearing, or one
   silently ceasing to collapse, fails the test. Berkshire Hathaway and Brown-Forman each appear on a
   single row in the current index, which is why 1,502 rows become 1,498 companies and not fewer.
+- **Robots is a signal, not a gate.** The limiter is the politeness mechanism: per-host concurrency
+  of one, a 500ms floor between requests to the same host, a global cap of four, and retries only on
+  5xx/429. No robots.txt is fetched for its own sake, which saves ~1,500 requests per run. This
+  decision is recorded in `internal/httpfetch/limiter.go` so a later reader does not apply a robots
+  gate to the ATS API tier by reflex.
+- **A timeout is not retried; a transport failure is, once.** A host that could not answer within
+  its budget is slow rather than unlucky, and retrying is how a batch spends its window on the sites
+  that cannot serve it. This is why `OutcomeTimeout` is a declared reason distinct from
+  `OutcomeTransportError`, and why `Response` carries `RetryAfter`.
+- **`internal/httpfetch` has no TLS opt-out.** An untrusted certificate is rejected by the default
+  transport and the only way to test otherwise is to inject a trusted client, so there is no switch
+  that could later be flipped in production.
 - **First real-network run should be the eleven verified companies** from section 4.11 before all
   1,498. If the gate holds on those it will likely hold at scale; if it does not, the seam contract
   is wrong and that is cheaper to learn on eleven companies than on the full set. It also produces
