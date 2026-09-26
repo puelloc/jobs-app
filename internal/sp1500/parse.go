@@ -125,12 +125,12 @@ func Parse(index Index, wikitext string) (Result, error) {
 			c.Article = strings.TrimSpace(link[1])
 			c.HasArticle = true
 			if link[2] != "" {
-				c.Name = cleanText(link[2])
+				c.Name = normalizeSecurityName(cleanText(link[2]))
 			} else {
-				c.Name = cleanText(link[1])
+				c.Name = normalizeSecurityName(cleanText(link[1]))
 			}
 		} else {
-			c.Name = cleanText(nameCell)
+			c.Name = normalizeSecurityName(cleanText(nameCell))
 		}
 
 		// Columns are located by header name rather than by fixed position. The pages disagree
@@ -338,6 +338,28 @@ func headerHasCIKColumn(header []string) bool {
 		}
 	}
 	return false
+}
+
+// trailingArticleRE matches the parenthetical article that Wikipedia uses to sort a name under its
+// significant word: "Coca-Cola Company (The)", "Hartford (The)".
+var trailingArticleRE = regexp.MustCompile(`\s*\((The|A|An)\)\s*$`)
+
+// normalizeSecurityName moves a trailing parenthetical article to the front, so the stored name reads
+// the way it is spoken and the slug is usable.
+//
+// The pages list ten S&P 500 names this way, and without the rewrite "Coca-Cola Company (The)" slugs
+// to "coca-cola-company-the", which is neither the company's name nor a useful key. The article title
+// for the same row is already "The Coca-Cola Company", so the two agree after this.
+func normalizeSecurityName(name string) string {
+	m := trailingArticleRE.FindStringSubmatch(name)
+	if m == nil {
+		return name
+	}
+	base := strings.TrimSpace(trailingArticleRE.ReplaceAllString(name, ""))
+	if base == "" {
+		return name
+	}
+	return m[1] + " " + base
 }
 
 // cleanText strips the wiki markup that would otherwise end up stored in a column.
