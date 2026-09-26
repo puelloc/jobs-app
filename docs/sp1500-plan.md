@@ -145,25 +145,51 @@ Implementation notes:
   the vocabulary cannot decay into aspirations or drift into free text. Renaming a value is a data
   migration, not a refactor.
 
+### SmartRecruiters: excluded, probed 2026-09-26
+
+The public postings API does not distinguish a real company from a nonexistent one. Probed with a
+real slug (Visa) and a fake one:
+
+```
+GET https://api.smartrecruiters.com/v1/companies/Visa/postings
+GET https://api.smartrecruiters.com/v1/companies/zzzznotrealco999/postings
+```
+
+Both returned **HTTP 200, 52 bytes, byte-identical**:
+`{"offset":0,"limit":100,"totalFound":0,"content":[]}`
+
+This is finding #9's failure mode again, one layer down: the website answers 200 for a fake slug and
+so does the API, so neither can corroborate a company. The error body for the bare company resource
+also names a different base path (`/public-posting-api/api-v1/`), which suggests `/v1/` is a
+redirect or alias rather than the documented surface.
+
+**Decision: SmartRecruiters is out of scope for M2a and stays unresolved.** Guessing a slug and
+accepting an empty board would write a fabricated `career_site_url`, which the locked decision on
+NULL-versus-fabricated forbids. Revisit only if a vendor endpoint is found that returns a
+distinguishing signal.
+
 ### Expected outcome of the eleven-company run
 
 Recorded before the run, so "eight of eleven resolved" is a deviation rather than a number with no
 baseline. All eleven should resolve, each with the recorded final URL, and the vendor-hosted ones
 should additionally report a non-empty `ATSHost`.
 
-| Company | Expected career site | Expected source | Expected ATS host |
+Slugs are as the M1 parser produces them, **not** the display names the brief listed: two differ.
+`Nike, Inc.` slugs to `nike-inc` and `Coca-Cola Company (The)` to `the-coca-cola-company`.
+
+| Company slug | Expected career site | Expected source | Expected ATS host |
 | --- | --- | --- | --- |
-| JPMorgan Chase | `jpmorganchase.com/careers` | nav_anchor | oraclecloud (from the redirect) |
-| Nike | `jobs.nike.com` → `careers.nike.com` | nav_anchor | workday |
-| Coca-Cola | `coca-colacompany.com/careers` | nav_anchor | — (first-party) |
-| Salesforce | `salesforce.com/company/careers/` | nav_anchor | — |
-| Costco | `costco.com/jobs.html` | nav_anchor | — |
-| ExxonMobil | `corporate.exxonmobil.com/careers` | nav_anchor | — |
-| Pfizer | `pfizer.com/about/careers` | nav_anchor | workday |
-| Boeing | `boeing.com/company/careers` | nav_anchor or sitemap | — |
-| Verizon | `mycareer.verizon.com` | robots or nav_anchor | — |
-| Goldman Sachs | `goldmansachs.com/careers` | nav_anchor | — |
-| Lockheed Martin | `lockheedmartin.com/en-us/careers/index.html` | nav_anchor | eightfold (from the second link) |
+| `jpmorgan-chase` | `jpmorganchase.com/careers` | nav_anchor | oraclecloud (from the redirect) |
+| `nike-inc` | `jobs.nike.com` → `careers.nike.com` | nav_anchor | workday |
+| `the-coca-cola-company` | `coca-colacompany.com/careers` | nav_anchor | — (first-party) |
+| `salesforce` | `salesforce.com/company/careers/` | nav_anchor | — |
+| `costco` | `costco.com/jobs.html` | nav_anchor | — |
+| `exxonmobil` | `corporate.exxonmobil.com/careers` | nav_anchor | — |
+| `pfizer` | `pfizer.com/about/careers` | nav_anchor | workday |
+| `boeing` | `boeing.com/company/careers` | nav_anchor or sitemap | — |
+| `verizon` | `mycareer.verizon.com` | robots or nav_anchor | — |
+| `goldman-sachs` | `goldmansachs.com/careers` | nav_anchor | — |
+| `lockheed-martin` | `lockheedmartin.com/en-us/careers/index.html` | nav_anchor | eightfold (from the second link) |
 
 Departures worth investigating rather than accepting:
 
