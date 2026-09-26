@@ -69,6 +69,10 @@ type Response struct {
 	ContentType string
 	// Body is the response body, already bounded by the caller's maxBodyBytes.
 	Body []byte
+	// RetryAfter is the Retry-After header verbatim, when the server sent one. It is surfaced as a
+	// field rather than through a header map because the limiter is the only consumer and it needs
+	// exactly this value; a map would be a larger interface for the same information.
+	RetryAfter string
 	// Truncated reports that the body hit the caller's byte bound and is therefore incomplete.
 	// Truncation is not a rejection by itself - the gate reads from the front of the document - but
 	// a tier whose decision needs the whole body, such as an ATS JSON parse, must treat it as one.

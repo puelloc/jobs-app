@@ -164,6 +164,7 @@ func (f *Fetcher) Fetch(ctx context.Context, rawURL string, maxBodyBytes int64) 
 		FinalURL:    resp.Request.URL.String(),
 		Status:      resp.StatusCode,
 		ContentType: resp.Header.Get("Content-Type"),
+		RetryAfter:  resp.Header.Get("Retry-After"),
 		Body:        body,
 		Truncated:   truncated,
 	}, nil
