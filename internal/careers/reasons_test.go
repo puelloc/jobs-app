@@ -80,7 +80,7 @@ var provocations = map[Reason]struct {
 		candidate: Candidate{URL: "https://example.com/about", Kind: KindCareerSite, Source: "path_heuristic"},
 		response:  okResponse("https://example.com/about", "About Example", "<h1>About us</h1><p>Our history.</p>"),
 	},
-	OutcomeATSBoardEmpty: {
+	OutcomeATSEmptyBoard: {
 		candidate: Candidate{URL: "https://boards-api.greenhouse.io/v1/boards/x/jobs", Kind: KindATSBoard},
 		response: Response{FinalURL: "https://boards-api.greenhouse.io/v1/boards/x/jobs", Status: 200,
 			ContentType: "application/json", Body: []byte(`{"jobs":[]}`)},
@@ -113,19 +113,51 @@ var provocations = map[Reason]struct {
 	},
 }
 
+// atsProvocations provoke a Reason through the ATS tier rather than through the gate. A reason that
+// belongs to one tier cannot be provoked by the other, and pretending otherwise would make the test
+// assert the wrong code path.
+var atsProvocations = map[Reason]struct {
+	tenant string
+	resp   Response
+}{
+	OutcomeATSTruncatedBody: {
+		tenant: "https://jobs.ashbyhq.com/acme",
+		resp:   Response{FinalURL: "https://api.ashbyhq.com/posting-api/job-board/acme", Status: 200, Truncated: true},
+	},
+	OutcomeATSInvalidJSON: {
+		tenant: "https://jobs.ashbyhq.com/acme",
+		resp:   Response{FinalURL: "https://api.ashbyhq.com/posting-api/job-board/acme", Status: 200, Body: []byte("{not json")},
+	},
+	OutcomeATSHttp4xx: {
+		tenant: "https://boards.greenhouse.io/acme",
+		resp:   Response{FinalURL: "https://boards-api.greenhouse.io/v1/boards/acme/jobs", Status: 404, Body: []byte("nope")},
+	},
+	OutcomeATSHttp5xx: {
+		tenant: "https://boards.greenhouse.io/acme",
+		resp:   Response{FinalURL: "https://boards-api.greenhouse.io/v1/boards/acme/jobs", Status: 502, Body: []byte("bad gateway")},
+	},
+}
+
 // Every declared Reason has a code path that produces it. This is what keeps the vocabulary from
 // decaying into a list of aspirations: adding a constant without a test fails here.
+//
+// A reason is provokable through either the gate or the ATS tier; the map it appears in says which.
 func TestEveryReasonIsProducible(t *testing.T) {
 	for _, want := range AllReasons() {
-		prov, ok := provocations[want]
-		if !ok {
-			t.Errorf("reason %q is declared but no test provokes it; either add a provocation or remove the constant", want)
+		if prov, ok := provocations[want]; ok {
+			if got := Validate(prov.candidate, prov.response); got.Reason != want {
+				t.Errorf("reason %q: provoking it through the gate produced %q instead", want, got.Reason)
+			}
 			continue
 		}
-		got := Validate(prov.candidate, prov.response)
-		if got.Reason != want {
-			t.Errorf("reason %q: provoking it produced %q instead", want, got.Reason)
+		if prov, ok := atsProvocations[want]; ok {
+			got := resolveWithResponse(t, prov.tenant, prov.resp)
+			if got.Reason != want {
+				t.Errorf("reason %q: provoking it through the ATS tier produced %q instead", want, got.Reason)
+			}
+			continue
 		}
+		t.Errorf("reason %q is declared but no test provokes it; either add a provocation or remove the constant", want)
 	}
 }
 

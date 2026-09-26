@@ -132,8 +132,8 @@ func TestValidationGateRejectsATSJSONWithNoEntries(t *testing.T) {
 	if v.Accepted() {
 		t.Fatalf("accepted an empty JSON board: %+v", v)
 	}
-	if v.Reason != "ats_board_empty" {
-		t.Errorf("reason = %q, want ats_board_empty", v.Reason)
+	if v.Reason != OutcomeATSEmptyBoard {
+		t.Errorf("reason = %q, want ats_empty_board", v.Reason)
 	}
 }
 

@@ -71,7 +71,17 @@ const (
 	// careers page.
 	OutcomeNoCareersSignal Reason = "no_careers_signal"
 	// OutcomeATSBoardEmpty means a JSON job board was reached but lists nothing.
-	OutcomeATSBoardEmpty Reason = "ats_board_empty"
+	OutcomeATSEmptyBoard Reason = "ats_empty_board"
+	// OutcomeATSTruncatedBody means the board's response hit the body bound. Separated from a parse
+	// error because a cut body is also invalid JSON and the two mean different things - an oversized
+	// board versus a broken one - and suggest different fixes.
+	OutcomeATSTruncatedBody Reason = "ats_truncated_body"
+	// OutcomeATSInvalidJSON means a 2xx body that is not valid JSON at all.
+	OutcomeATSInvalidJSON Reason = "ats_invalid_json"
+	// OutcomeATSHttp4xx is a client-error status from a board API.
+	OutcomeATSHttp4xx Reason = "ats_http_4xx"
+	// OutcomeATSHttp5xx is a server-error status from a board API.
+	OutcomeATSHttp5xx Reason = "ats_http_5xx"
 
 	// --- accepted ---
 
@@ -110,7 +120,11 @@ func AllReasons() []Reason {
 		OutcomeProductOrInvestorPath,
 		OutcomeLocaleOnlyPath,
 		OutcomeNoCareersSignal,
-		OutcomeATSBoardEmpty,
+		OutcomeATSEmptyBoard,
+		OutcomeATSTruncatedBody,
+		OutcomeATSInvalidJSON,
+		OutcomeATSHttp4xx,
+		OutcomeATSHttp5xx,
 		OutcomeHTMLHomepage,
 		OutcomeHTMLCareers,
 		OutcomeATSBoard,

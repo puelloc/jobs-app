@@ -289,7 +289,7 @@ func validateATSJSON(v Verdict, r Response) Verdict {
 	v.Evidence = fmt.Sprintf("ats_entries=%d", count)
 	if count == 0 {
 		v.Status = StatusRejected
-		v.Reason = OutcomeATSBoardEmpty
+		v.Reason = OutcomeATSEmptyBoard
 		return v
 	}
 	v.Status = StatusAccepted
