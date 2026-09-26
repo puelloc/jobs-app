@@ -138,6 +138,44 @@ Implementation notes:
   1,498. If the gate holds on those it will likely hold at scale; if it does not, the seam contract
   is wrong and that is cheaper to learn on eleven companies than on the full set. It also produces
   the first honest resolution rate, which is the measurement section 8.1 needs.
+- **The rejection-reason vocabulary is closed** (`internal/careers/reasons.go`). Every verdict carries
+  exactly one `Reason`, and that value is persisted verbatim into
+  `url_resolution_attempts.rejection_reason`. `TestEveryReasonIsProducible` requires each declared
+  value to have a provocation, and `TestNoVerdictProducesAnUndeclaredReason` closes the other end, so
+  the vocabulary cannot decay into aspirations or drift into free text. Renaming a value is a data
+  migration, not a refactor.
+
+### Expected outcome of the eleven-company run
+
+Recorded before the run, so "eight of eleven resolved" is a deviation rather than a number with no
+baseline. All eleven should resolve, each with the recorded final URL, and the vendor-hosted ones
+should additionally report a non-empty `ATSHost`.
+
+| Company | Expected career site | Expected source | Expected ATS host |
+| --- | --- | --- | --- |
+| JPMorgan Chase | `jpmorganchase.com/careers` | nav_anchor | oraclecloud (from the redirect) |
+| Nike | `jobs.nike.com` → `careers.nike.com` | nav_anchor | workday |
+| Coca-Cola | `coca-colacompany.com/careers` | nav_anchor | — (first-party) |
+| Salesforce | `salesforce.com/company/careers/` | nav_anchor | — |
+| Costco | `costco.com/jobs.html` | nav_anchor | — |
+| ExxonMobil | `corporate.exxonmobil.com/careers` | nav_anchor | — |
+| Pfizer | `pfizer.com/about/careers` | nav_anchor | workday |
+| Boeing | `boeing.com/company/careers` | nav_anchor or sitemap | — |
+| Verizon | `mycareer.verizon.com` | robots or nav_anchor | — |
+| Goldman Sachs | `goldmansachs.com/careers` | nav_anchor | — |
+| Lockheed Martin | `lockheedmartin.com/en-us/careers/index.html` | nav_anchor | eightfold (from the second link) |
+
+Departures worth investigating rather than accepting:
+
+- **Any company resolving to empty** means the gate is over-strict or the seam contract is wrong.
+  Record which `rejection_reason` the last candidate carried.
+- **Any company whose only accepted candidate is the vendor board** means the branded page lost the
+  ranking, which is the opposite of the recorded preference.
+- **Any `unverifiable_ats_title`** means the company name reaching the gate had no distinctive word,
+  which would be a bug in how the caller supplies the name rather than a fact about the site.
+- **403 on any of the eleven** contradicts the planning measurement, where all eleven responded to a
+  plain client; it would suggest the production `User-Agent` is being treated differently from the
+  exploratory one, which is itself worth knowing before 1,498 requests.
 - A **transport failure is an error state, not a rejection**: an unreachable site is unknown, not
   disproven, so it stays retryable.
 - A vendor board ranks **below** a company's own page, matching the recorded preference for a

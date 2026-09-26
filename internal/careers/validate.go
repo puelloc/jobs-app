@@ -75,9 +75,9 @@ type Response struct {
 // Verdict is the gate's decision.
 type Verdict struct {
 	Status ValidationStatus
-	// Reason is a short machine-readable label, stored in rejection_reason. It is stable so runs
-	// can be compared; prose belongs in comments, not here.
-	Reason string
+	// Reason is the machine-readable outcome label, stored in rejection_reason. It is a Reason
+	// rather than a string so the vocabulary is closed: see reasons.go.
+	Reason Reason
 	// FinalURL is the URL the response actually came from, after redirects. It is the value worth
 	// storing: a branded careers subdomain often redirects to the ATS that hosts it, and that
 	// redirect is what reveals the applicant-tracking vendor.
@@ -103,12 +103,12 @@ func Validate(c Candidate, r Response) Verdict {
 	if r.TransportError != nil {
 		return Verdict{
 			Status:   StatusError,
-			Reason:   "transport_error",
+			Reason:   OutcomeTransportError,
 			FinalURL: r.FinalURL,
 		}
 	}
 	if r.Status == 0 {
-		return Verdict{Status: StatusError, Reason: "no_status", FinalURL: r.FinalURL}
+		return Verdict{Status: StatusError, Reason: OutcomeNoStatus, FinalURL: r.FinalURL}
 	}
 
 	final := r.FinalURL
@@ -120,29 +120,29 @@ func Validate(c Candidate, r Response) Verdict {
 	// A redirect target that cannot be parsed is a red flag: the stored URL would be unusable.
 	if _, err := parseURL(final); err != nil {
 		v.Status = StatusRejected
-		v.Reason = "unparseable_final_url"
+		v.Reason = OutcomeUnparseableFinalURL
 		return v
 	}
 
 	if r.Status == 403 {
 		v.Status = StatusRejected
-		v.Reason = "forbidden"
+		v.Reason = OutcomeForbidden
 		return v
 	}
 	if r.Status == 429 {
 		v.Status = StatusRejected
-		v.Reason = "rate_limited"
+		v.Reason = OutcomeRateLimited
 		return v
 	}
 	if r.Status < 200 || r.Status > 299 {
 		v.Status = StatusRejected
-		v.Reason = fmt.Sprintf("http_%d", r.Status)
+		v.Reason = httpReason(r.Status)
 		return v
 	}
 
 	if r.Status == 204 || len(strings.TrimSpace(string(r.Body))) == 0 {
 		v.Status = StatusRejected
-		v.Reason = "empty_body"
+		v.Reason = OutcomeEmptyBody
 		return v
 	}
 
@@ -156,7 +156,7 @@ func Validate(c Candidate, r Response) Verdict {
 		return validateHTML(v, c, r)
 	default:
 		v.Status = StatusError
-		v.Reason = "unknown_kind"
+		v.Reason = OutcomeUnknownKind
 		return v
 	}
 }
@@ -169,12 +169,12 @@ func validateHTML(v Verdict, c Candidate, r Response) Verdict {
 
 	if looksLikeChallenge(body, title) {
 		v.Status = StatusRejected
-		v.Reason = "bot_challenge"
+		v.Reason = OutcomeBotChallenge
 		return v
 	}
 	if isParkedDomain(body, title) {
 		v.Status = StatusRejected
-		v.Reason = "parked_domain"
+		v.Reason = OutcomeParkedDomain
 		return v
 	}
 
@@ -187,19 +187,19 @@ func validateHTML(v Verdict, c Candidate, r Response) Verdict {
 		// unverifiable title is its own rejection rather than a vacuous pass.
 		if c.Kind == KindATSBoard && distinctiveToken(c.CompanyName) == "" {
 			v.Status = StatusRejected
-			v.Reason = "unverifiable_ats_title"
+			v.Reason = OutcomeUnverifiableATSTitle
 			return v
 		}
 		if !containsCompanyToken(title, c.CompanyName) {
 			v.Status = StatusRejected
-			v.Reason = "generic_title_without_company"
+			v.Reason = OutcomeGenericTitleWithoutCompany
 			return v
 		}
 	}
 
 	if c.Kind == KindWebsite {
 		v.Status = StatusAccepted
-		v.Reason = "html_homepage"
+		v.Reason = OutcomeHTMLHomepage
 		return v
 	}
 
@@ -209,7 +209,7 @@ func validateHTML(v Verdict, c Candidate, r Response) Verdict {
 	// the JSON API: Ashby serves a bare "Jobs" shell for a company that does not exist.
 	if c.Kind == KindATSBoard && distinctiveToken(c.CompanyName) == "" {
 		v.Status = StatusRejected
-		v.Reason = "unverifiable_ats_title"
+		v.Reason = OutcomeUnverifiableATSTitle
 		return v
 	}
 
@@ -220,12 +220,12 @@ func validateHTML(v Verdict, c Candidate, r Response) Verdict {
 	// path all matched.
 	if isProductOrInvestorPath(v.FinalURL, c.Source) {
 		v.Status = StatusRejected
-		v.Reason = "product_or_investor_path"
+		v.Reason = OutcomeProductOrInvestorPath
 		return v
 	}
 	if isLocaleOnlyPath(v.FinalURL) {
 		v.Status = StatusRejected
-		v.Reason = "locale_only_path"
+		v.Reason = OutcomeLocaleOnlyPath
 		return v
 	}
 
@@ -250,11 +250,11 @@ func validateHTML(v Verdict, c Candidate, r Response) Verdict {
 
 	if len(evidence) == 0 {
 		v.Status = StatusRejected
-		v.Reason = "no_careers_signal"
+		v.Reason = OutcomeNoCareersSignal
 		return v
 	}
 	v.Status = StatusAccepted
-	v.Reason = "html_careers"
+	v.Reason = OutcomeHTMLCareers
 	return v
 }
 
@@ -268,11 +268,11 @@ func validateATSJSON(v Verdict, r Response) Verdict {
 	v.Evidence = fmt.Sprintf("ats_entries=%d", count)
 	if count == 0 {
 		v.Status = StatusRejected
-		v.Reason = "ats_board_empty"
+		v.Reason = OutcomeATSBoardEmpty
 		return v
 	}
 	v.Status = StatusAccepted
-	v.Reason = "ats_board"
+	v.Reason = OutcomeATSBoard
 	return v
 }
 
@@ -424,15 +424,19 @@ var corporateStopWords = map[string]bool{
 	"brands": true, "products": true, "enterprises": true, "partners": true, "trust": true, "fund": true,
 }
 
-// distinctiveToken returns the longest word of at least four characters in a company name that is
+// distinctiveToken returns the longest word of at least three characters in a company name that is
 // not a corporate stop word, lowercased. It returns "" when the name has no such word, which is the
-// case for names like "3M" and "AT&T" that are entirely punctuation, digits or initials.
+// case for names like "3M" and "AT&T" that are entirely initials or digits.
+//
+// Three rather than four because real brands are that short - Fox Corporation must yield "fox", or a
+// link to its applicant-tracking board cannot be corroborated by its title and gets rejected as
+// unverifiable. The filtering is done by the stop-word list, not by length.
 func distinctiveToken(company string) string {
 	best := ""
 	for _, field := range strings.FieldsFunc(company, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9')
 	}) {
-		if len(field) < 4 {
+		if len(field) < 3 {
 			continue
 		}
 		lower := strings.ToLower(field)

@@ -503,9 +503,46 @@ func TestSP1500UpsertCollapsesExactlyFourDualClassPairs(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	want := []string{"Alphabet Inc.", "Fox Corporation", "News Corp", "Under Armour"}
-	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("dual-class groups = %v, want %v", got, want)
+	// Name AND index. The count catches a fifth pair appearing; the names catch a swap; the indices
+	// catch a pair crossing between pages, which would silently change which page owns the row.
+	want := []struct {
+		name  string
+		index Index
+	}{
+		{"Alphabet Inc.", SP500},
+		{"Fox Corporation", SP500},
+		{"News Corp", SP500},
+		{"Under Armour", SP600},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("dual-class groups = %v, want %d", got, len(want))
+	}
+	for i, w := range want {
+		if got[i] != w.name {
+			t.Errorf("group %d = %q, want %q", i, got[i], w.name)
+		}
+	}
+
+	// Index is tracked per page so a pair that migrates between indices is caught.
+	for _, tc := range []struct {
+		index Index
+		file  string
+		names []string
+	}{
+		{SP500, "sp500.wiki", []string{"Alphabet Inc.", "Fox Corporation", "News Corp"}},
+		{SP400, "sp400.wiki", nil},
+		{SP600, "sp600.wiki", []string{"Under Armour"}},
+	} {
+		var names []string
+		for _, rows := range shareClassGroups(parseFixture(t, tc.index, tc.file)) {
+			if len(rows) > 1 {
+				names = append(names, rows[0].Name)
+			}
+		}
+		sort.Strings(names)
+		if strings.Join(names, "|") != strings.Join(tc.names, "|") {
+			t.Errorf("%s dual-class names = %v, want %v", tc.index, names, tc.names)
+		}
 	}
 
 	// Each group is exactly one pair, and both rows carry the same name.
@@ -555,6 +592,50 @@ func TestBerkshireAndBrownFormanAreSingleRows(t *testing.T) {
 		}
 		if n != 1 {
 			t.Errorf("%q appears on %d rows, want 1: if the index gained a second share class, the collapse count changes", want, n)
+		}
+	}
+}
+
+// collapseKey duplicates the companies.slug normalisation, so its edge cases must be exercised on
+// both sides or the two can drift while each table still passes. This mirrors the store's
+// TestIndexCompanySlugCollapsesCosmeticVariation input for input, plus the punctuation that actually
+// occurs on these pages: "Brown–Forman" uses an EN DASH, not a hyphen.
+func TestCollapseKeyMatchesTheStoreSlugOnSharedEdgeCases(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"Apple Inc.", "apple-inc"},
+		{"Alphabet Inc.", "alphabet-inc"},
+		{"3M", "3m"},
+		{"AT&T", "at-t"},
+		{"A. O. Smith", "a-o-smith"},
+		{"  Spaced   Out  ", "spaced-out"},
+		// Real page data. The en dash and the ampersand both collapse to one hyphen.
+		{"Brown–Forman", "brown-forman"},
+		{"Fox Corporation", "fox-corporation"},
+		{"News Corp", "news-corp"},
+		{"Under Armour", "under-armour"},
+		{"Johnson & Johnson", "johnson-johnson"},
+	} {
+		if got := collapseKey(tc.in); got != tc.want {
+			t.Errorf("collapseKey(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A hyphen and an en dash are different bytes and the same key, which is the property that lets
+// Brown–Forman be matched at all.
+func TestCollapseKeyTreatsHyphenAndEnDashAlike(t *testing.T) {
+	if collapseKey("Brown-Forman") != collapseKey("Brown–Forman") {
+		t.Errorf("hyphen and en dash produced different keys: %q vs %q",
+			collapseKey("Brown-Forman"), collapseKey("Brown–Forman"))
+	}
+}
+
+// The S&P 400 has no dual-class listing today. Pinned separately so that when one appears it fails
+// here, naming the page, rather than only moving a total in another test.
+func TestSP400HasNoDualClassCollapse(t *testing.T) {
+	for key, rows := range shareClassGroups(parseFixture(t, SP400, "sp400.wiki")) {
+		if len(rows) > 1 {
+			t.Errorf("the S&P 400 gained a dual-class listing: key %q covers %d rows (%q)", key, len(rows), rows[0].Name)
 		}
 	}
 }

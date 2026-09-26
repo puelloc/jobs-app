@@ -214,12 +214,12 @@ func TestValidationGateTreatsTransportFailureAsError(t *testing.T) {
 func TestValidationGateRejectsForbiddenAndRateLimited(t *testing.T) {
 	for _, tc := range []struct {
 		status int
-		want   string
+		want   Reason
 	}{
-		{403, "forbidden"},
-		{429, "rate_limited"},
-		{404, "http_404"},
-		{500, "http_500"},
+		{403, OutcomeForbidden},
+		{429, OutcomeRateLimited},
+		{404, httpReason(404)},
+		{500, httpReason(500)},
 	} {
 		v := Validate(Candidate{URL: "https://example.com/careers", Kind: KindCareerSite},
 			Response{FinalURL: "https://example.com/careers", Status: tc.status, ContentType: "text/html", Body: []byte("<html></html>")})

@@ -48,6 +48,16 @@ import (
 //     megabytes (Ashby returned 13.8MB for one company during planning), so the limit belongs here
 //     rather than in the gate.
 //
+//   - Body may therefore be TRUNCATED, and a consumer must not assume it is complete. Truncation is
+//     not a failure as long as the decision does not depend on the missing part, which is why the
+//     gate reads only from the front of the document: the <title> and <h1> are in the first
+//     kilobytes, JSON-LD blocks sit in <head>, and an ATS board's entry count is established by the
+//     opening of its array. A tier whose decision genuinely needs the whole body - a paginated job
+//     list, say - must ask the fetcher for an unbounded or cursor-based read rather than silently
+//     deciding on a cut-off document. What must never happen is a truncation being reported as a
+//     content mismatch: that would look like "this is the wrong page" when the truth is "I stopped
+//     reading early".
+//
 //   - The request carries the configured User-Agent and uses normal TLS verification. Neither is
 //     spoofed or relaxed: 403 is recorded as a forbidden response, not disguised.
 //
@@ -89,7 +99,7 @@ type Attempt struct {
 	FinalURL        string
 	Title           string
 	ValidationState ValidationStatus
-	RejectionReason string
+	RejectionReason Reason
 	Evidence        string
 }
 
