@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -52,7 +53,29 @@ func baseURL() string {
 }
 
 func main() {
-	os.Exit(run())
+	os.Exit(dispatch(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// dispatch routes to a subcommand.
+//
+// With no subcommand the index bootstrap runs, which is the behaviour this binary had before
+// `resolve` existed, so an existing cron entry keeps working unchanged.
+func dispatch(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "resolve":
+			return runResolve(args[1:], stdout, stderr)
+		case "indices":
+			return run()
+		case "-h", "--help", "help":
+			fmt.Fprintln(stderr, "usage: sp1500 [indices|resolve] [flags]")
+			return exitOK
+		default:
+			fmt.Fprintf(stderr, "status=error step=config err=%q\n", "unknown subcommand "+singleLine(args[0]))
+			return exitConfig
+		}
+	}
+	return run()
 }
 
 func run() int {
