@@ -910,6 +910,26 @@ stays permissive so callers can use it as a substring test, and the *callers* th
 corroboration reject separately (`unverifiable_ats_title`). The audit is to grep the gate and the
 parser for predicates of that shape and confirm each has an `else → reject` arm.
 
+**3. A check whose guard is nondeterministic.** Found in the rate limiter: slot acquisition was a
+`select` over a ready send *and* a ready `Done` channel when the context was already cancelled. Go
+picks among ready cases at random, so roughly half the requests escaped a cancelled run - hitting
+sites after shutdown and writing attempts for abandoned work. Worse than a consistent failure,
+because a single test iteration passes half the time.
+
+The rule: an already-cancelled context is checked *before* the `select`, not only inside it. The
+audit is to grep for any `select` that has a `ctx.Done()` arm alongside a case that can be ready
+(`chan <-`, a non-blocking receive); each needs an explicit `ctx.Err()` first.
+`TestCancelledContextNeverAcquiresASlot` loops 200 times, because one iteration proves nothing.
+
+**4. A test fake whose contract diverges from the real implementation.** `fakeClock.Sleep` returned
+`nil` unconditionally, modelling a sleep that ignores cancellation - the opposite of the real
+`sleepContext`. It did not merely fail to catch the race above; it *masked* it, because the retry
+loop appeared to continue past a cancelled context.
+
+The rule: for every fake in the tree, confirm its contract matches the real implementation on the
+points that matter - cancellation, error versus empty return, and zero-values. The `Fetcher` contract
+written at the interface before either implementation existed is the same concern applied in advance.
+
 A related instance from the parser: the delimiter regex `\n[ \t]*\|` consumed only one pipe of
 `\n||`, because Go's regexp takes the first matching alternative and does not backtrack into the
 second. The check "did this split produce cells" passed while every cell carried a leading `|`. A
