@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 )
 
@@ -238,6 +239,33 @@ func TestUpsertIndexCompaniesMovesMembership(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("companies rows = %d, want 1", n)
+	}
+}
+
+// The wiki article title is carried through the parser but has no column yet. It is the join key
+// M2 uses against Wikidata, so this test records that the gap is deliberate rather than an
+// oversight: when a column is added, this test is what will change.
+func TestUpsertIndexCompaniesDoesNotPersistTheArticleTitle(t *testing.T) {
+	database := newTestDB(t)
+
+	upsertTestIndex(t, database, IndexSP500, []IndexCompany{
+		{Name: "Apple Inc.", Article: "Apple Inc.", Industry: "Information Technology"},
+	})
+
+	// No column holds it, so nothing should silently claim to.
+	rows, err := database.Query(`SELECT name FROM pragma_table_info('companies')`)
+	if err != nil {
+		t.Fatalf("table_info: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var col string
+		if err := rows.Scan(&col); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if strings.Contains(strings.ToLower(col), "article") {
+			t.Fatalf("companies gained a column %q holding the article title; persist it in the upsert too", col)
+		}
 	}
 }
 

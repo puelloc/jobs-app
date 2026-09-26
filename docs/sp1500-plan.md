@@ -49,21 +49,43 @@ remote engineers) is **out of scope for M1/M2** and belongs against the seeded r
 
 | Milestone | Scope | Status |
 | --- | --- | --- |
-| **M1** | S&P wikitext parser + golden fixtures + `companies` enrichment columns + `platforms` `'reference'` rebuild + migration-runner FK-off support + `scrape_runs`/exit codes | **in progress** |
+| **M1** | S&P wikitext parser + golden fixtures + `companies` enrichment columns + `platforms` `'reference'` rebuild + migration-runner FK-off support + `scrape_runs`/exit codes | **complete** |
 | **M2a** | Careers ladder tiers 1–4 + `5a` (verified public ATS JSON APIs) + `5c` (SmartRecruiters) | planned |
 
 ### M1 progress
 
 | Step | Status |
 | --- | --- |
-| Commit 1 — migration runner FK-off support + 5 tests | done |
-| Commit 2 — `004_reference_platforms.sql` + `006_company_enrichment.sql` | done |
-| Commit 3 — `internal/sp1500` parser + golden fixtures | done |
-| Commit 4 — upsert `companies` + `scrape_runs` + exit codes | not started |
+| Migration runner FK-off support + tests | done |
+| `004_reference_platforms.sql` + `006_company_enrichment.sql` | done |
+| `internal/sp1500` parser + golden fixtures | done |
+| `internal/rawstore` — raw capture, shared | done |
+| `internal/store` — upsert constituents | done |
+| `internal/runindex` — run lifecycle | done |
+| `cmd/sp1500` — the command | done |
 
-Migration numbering was corrected during implementation: the existing `003_fix_remoteok_endpoint.sql`
-already owned version 003, so the new migrations are `004` and `006` (005 stays reserved for M2).
-`TestMigrationVersionsAreUniqueAndOrdered` caught the original collision. |
+Verified end to end against a local server over the recorded fixtures: 503 + 399 + 600 = **1502 rows**,
+collapsing to **1498 companies** because dual-class listings share a slug (the S&P 500 loses 3,
+the S&P 600 loses 1), with three `scrape_runs` rows all `ok`.
+
+Implementation notes that differ from, or add to, the plan above:
+
+- Migration numbering: the existing `003_fix_remoteok_endpoint.sql` already owned version 003, so the
+  new migrations are `004` and `006`. 005 stays reserved for M2.
+  `TestMigrationVersionsAreUniqueAndOrdered` caught the original collision.
+- `internal/rawstore` was extracted from `cmd/scraper/main.go` rather than copied, so both commands
+  share one capture implementation. `cmd/scraper/main.go` had uncommitted work in it and was left
+  alone. A collision is now only a collision when a *regular file* occupies the name; a directory
+  was previously reported as "already captured".
+- Company **tickers are not persisted**. They are a row key, not data this pipeline consumes. The
+  dual-class rows still collapse correctly because the slug comes from the company name.
+- The wiki **article title is carried by the parser but has no column**. It is M2's join key against
+  Wikidata, and a test pins the gap so adding the column is a deliberate change.
+- `SP1500_BASE_URL` overrides Wikipedia's host, so the command's own wiring is testable offline.
+- CIK is stored as TEXT: the S&P 400 page has no CIK column and 281 of its 399 rows carry a
+  ticker-like `CIK=` value.
+
+The no-article row count is **252** (1 / 43 / 208), not the 253 recorded earlier.
 | **M2b** | `5b` HTML-only ATS tenant extraction (Oracle Cloud, Eightfold, Workday, Phenom, SuccessFactors, Taleo) | planned |
 | **M3** | browser-use behind `ENABLE_BROWSER_USE`, Go→Python subprocess, shared validation gate | deferred |
 
