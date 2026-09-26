@@ -25,6 +25,11 @@ const (
 	// OutcomeTransportError means the request failed before a complete response: DNS, connection
 	// refused or reset, TLS failure. An unknown, not a rejection, so the site stays retryable.
 	OutcomeTransportError Reason = "transport_error"
+	// OutcomeTimeout means the request ran out of time. Declared separately from
+	// OutcomeTransportError because the remedy differs: a refused connection is worth retrying, a
+	// request that exhausted its budget against a slow host is not, and collapsing the two would
+	// leave the retry policy unable to tell them apart.
+	OutcomeTimeout Reason = "timeout"
 	// OutcomeNoStatus means a response object reached the gate with no status set, which is a
 	// defect in the fetcher rather than a fact about the site.
 	OutcomeNoStatus Reason = "no_status"
@@ -91,6 +96,7 @@ func httpReason(status int) Reason {
 func AllReasons() []Reason {
 	return []Reason{
 		OutcomeTransportError,
+		OutcomeTimeout,
 		OutcomeNoStatus,
 		OutcomeForbidden,
 		OutcomeRateLimited,

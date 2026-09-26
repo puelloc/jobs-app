@@ -63,9 +63,22 @@ import (
 //
 // A timeout is a per-request, configurable setting, and surfaces as a transport error wrapping
 // context.DeadlineExceeded so an attempt record can say "timeout" rather than "network".
+//
+// maxBodyBytes bounds the response body. It is a parameter rather than a fetcher setting because
+// the right bound is a property of the expected document, not of the client: a corporate homepage is
+// a few hundred kilobytes, while an Ashby job board for one company measured 13.8MB during planning.
+// A single global bound would either truncate the boards or make every HTML fetch malloc 24MB.
+//
+// The fetcher must still return a Response when the body is cut, with Truncated set. Deciding what
+// truncation means belongs to the caller: the gate reads only the front of a document, whereas a
+// JSON tier must treat a cut body as a hard rejection.
 type Fetcher interface {
-	Fetch(ctx context.Context, url string) (Response, error)
+	Fetch(ctx context.Context, url string, maxBodyBytes int64) (Response, error)
 }
+
+// HTMLMaxBodyBytes bounds a response expected to be a web page. Comfortably above every homepage
+// and careers page measured, and far below what a job-board API can return.
+const HTMLMaxBodyBytes = 2 << 20
 
 // Limits bound the work one company can cause. They exist because a resolver that follows every
 // link on a large corporate site will not finish, and because the odd site publishes thousands of
@@ -170,7 +183,7 @@ func (r Resolver) Resolve(ctx context.Context, companyName, homepageURL string) 
 	}
 
 	for _, cand := range ordered {
-		resp, err := r.Fetcher.Fetch(ctx, cand.URL)
+		resp, err := r.Fetcher.Fetch(ctx, cand.URL, HTMLMaxBodyBytes)
 		if err != nil && resp.TransportError == nil {
 			resp.TransportError = err
 		}
@@ -203,7 +216,7 @@ func (r Resolver) fromRobots(ctx context.Context, companyName, origin string, ou
 	robotsURL := origin + "/robots.txt"
 	var res robotsResult
 
-	resp, err := r.Fetcher.Fetch(ctx, robotsURL)
+	resp, err := r.Fetcher.Fetch(ctx, robotsURL, HTMLMaxBodyBytes)
 	if err != nil && resp.TransportError == nil {
 		resp.TransportError = err
 	}
@@ -254,7 +267,7 @@ func (r Resolver) fromSitemaps(ctx context.Context, companyName, origin string, 
 			// A declared sitemap on another host is a legitimate pointer, so it is followed,
 			// but only after the same-site ones.
 		}
-		resp, err := r.Fetcher.Fetch(ctx, ref.URL)
+		resp, err := r.Fetcher.Fetch(ctx, ref.URL, HTMLMaxBodyBytes)
 		if err != nil && resp.TransportError == nil {
 			resp.TransportError = err
 		}
@@ -269,7 +282,7 @@ func (r Resolver) fromSitemaps(ctx context.Context, companyName, origin string, 
 				if i >= limits.MaxSitemaps {
 					break
 				}
-				sub, err := r.Fetcher.Fetch(ctx, loc)
+				sub, err := r.Fetcher.Fetch(ctx, loc, HTMLMaxBodyBytes)
 				if err != nil && sub.TransportError == nil {
 					sub.TransportError = err
 				}
@@ -308,7 +321,7 @@ type anchorResult struct {
 func (r Resolver) fromHomepage(ctx context.Context, companyName, homepageURL string, out *Outcome) anchorResult {
 	var res anchorResult
 
-	resp, err := r.Fetcher.Fetch(ctx, homepageURL)
+	resp, err := r.Fetcher.Fetch(ctx, homepageURL, HTMLMaxBodyBytes)
 	if err != nil && resp.TransportError == nil {
 		resp.TransportError = err
 	}

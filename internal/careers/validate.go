@@ -14,7 +14,10 @@
 package careers
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -64,12 +67,20 @@ type Response struct {
 	Status int
 	// ContentType is the Content-Type header, with any parameters.
 	ContentType string
-	// Body is the response body, already bounded by the caller.
+	// Body is the response body, already bounded by the caller's maxBodyBytes.
 	Body []byte
+	// Truncated reports that the body hit the caller's byte bound and is therefore incomplete.
+	// Truncation is not a rejection by itself - the gate reads from the front of the document - but
+	// a tier whose decision needs the whole body, such as an ATS JSON parse, must treat it as one.
+	Truncated bool
 	// TransportError is non-nil when the request itself failed. Its presence makes the verdict
 	// StatusError rather than StatusRejected: an unreachable site is unknown, not disproven, and
 	// must not be recorded as a negative result.
 	TransportError error
+	// TimedOut reports that TransportError is a deadline. It is separated from the error itself
+	// because a timeout has different retry semantics from a refusal: a refused connection is worth
+	// retrying, a request that ran out of time on a possibly-slow host is not.
+	TimedOut bool
 }
 
 // Verdict is the gate's decision.
@@ -101,9 +112,15 @@ func Validate(c Candidate, r Response) Verdict {
 	}
 
 	if r.TransportError != nil {
+		reason := OutcomeTransportError
+		if r.TimedOut || isTimeout(r.TransportError) {
+			// Distinct from a refusal, because the remedy is: a slow host is not a dead one, and
+			// retrying a timeout against a host that cannot serve us is how a batch run stalls.
+			reason = OutcomeTimeout
+		}
 		return Verdict{
 			Status:   StatusError,
-			Reason:   OutcomeTransportError,
+			Reason:   reason,
 			FinalURL: r.FinalURL,
 		}
 	}
@@ -570,6 +587,12 @@ func firstN(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// isTimeout reports whether an error is a deadline, so a fetcher that only surfaces the raw error
+// still produces OutcomeTimeout rather than the generic transport reason.
+func isTimeout(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)
 }
 
 func isJSONContentType(ct string) bool {

@@ -6,6 +6,7 @@
 package careers
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +21,10 @@ var provocations = map[Reason]struct {
 	OutcomeTransportError: {
 		candidate: Candidate{URL: "https://example.com/careers", Kind: KindCareerSite},
 		response:  Response{TransportError: errString("connection refused")},
+	},
+	OutcomeTimeout: {
+		candidate: Candidate{URL: "https://example.com/careers", Kind: KindCareerSite},
+		response:  Response{TransportError: context.DeadlineExceeded, TimedOut: true},
 	},
 	OutcomeNoStatus: {
 		candidate: Candidate{URL: "https://example.com/careers", Kind: KindCareerSite},
@@ -227,5 +232,39 @@ func TestDistinctiveTokenIsEmptyForNamesWithoutAWord(t *testing.T) {
 		if got := distinctiveToken(name); got != "" {
 			t.Errorf("distinctiveToken(%q) = %q, want empty", name, got)
 		}
+	}
+}
+
+// A fetcher that surfaces only the raw error, without setting TimedOut, must still produce
+// OutcomeTimeout: the flag is a convenience, not the only route to the reason.
+func TestTimeoutIsDetectedFromTheErrorAlone(t *testing.T) {
+	v := Validate(
+		Candidate{URL: "https://example.com/careers", Kind: KindCareerSite},
+		Response{TransportError: context.DeadlineExceeded},
+	)
+	if v.Reason != OutcomeTimeout {
+		t.Errorf("reason = %q, want %q", v.Reason, OutcomeTimeout)
+	}
+}
+
+// And the two reasons stay distinct, because the retry policy keys off the difference.
+func TestTimeoutIsDistinctFromTransportError(t *testing.T) {
+	timeout := Validate(
+		Candidate{URL: "https://example.com/careers", Kind: KindCareerSite},
+		Response{TransportError: context.DeadlineExceeded},
+	)
+	refused := Validate(
+		Candidate{URL: "https://example.com/careers", Kind: KindCareerSite},
+		Response{TransportError: errString("connection refused")},
+	)
+	if timeout.Reason == refused.Reason {
+		t.Fatalf("a timeout and a refusal produced the same reason %q; the retry policy cannot distinguish them", timeout.Reason)
+	}
+	if refused.Reason != OutcomeTransportError {
+		t.Errorf("refusal reason = %q, want %q", refused.Reason, OutcomeTransportError)
+	}
+	// Both are unknowns, not rejections, so the site stays retryable either way.
+	if timeout.Status != StatusError || refused.Status != StatusError {
+		t.Errorf("statuses = %q and %q, want both %q", timeout.Status, refused.Status, StatusError)
 	}
 }

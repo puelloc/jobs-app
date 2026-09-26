@@ -22,18 +22,25 @@ func newStubFetcher(pages map[string]Response) *stubFetcher {
 	return &stubFetcher{pages: pages, calls: map[string]int{}}
 }
 
-func (s *stubFetcher) Fetch(_ context.Context, url string) (Response, error) {
+func (s *stubFetcher) Fetch(_ context.Context, url string, maxBodyBytes int64) (Response, error) {
 	s.calls[url]++
 	if s.err != nil {
 		return Response{}, s.err
 	}
-	if r, ok := s.pages[url]; ok {
-		if r.FinalURL == "" {
-			r.FinalURL = url
-		}
-		return r, nil
+	r, ok := s.pages[url]
+	if !ok {
+		r = Response{FinalURL: url, Status: 404, ContentType: "text/html", Body: []byte("<html>not found</html>")}
 	}
-	return Response{FinalURL: url, Status: 404, ContentType: "text/html", Body: []byte("<html>not found</html>")}, nil
+	if r.FinalURL == "" {
+		r.FinalURL = url
+	}
+	// Honour the bound the way a real fetcher must, and flag the cut. Without this the stub would
+	// accept any bound and the truncation contract would be untested behind the seam.
+	if maxBodyBytes > 0 && int64(len(r.Body)) > maxBodyBytes {
+		r.Body = r.Body[:maxBodyBytes]
+		r.Truncated = true
+	}
+	return r, nil
 }
 
 func htmlPage(url, title, body string) Response {
@@ -296,5 +303,80 @@ func TestDedupeCandidatesKeepsTheFirstOccurrence(t *testing.T) {
 	}
 	if got[0].Source != "nav_anchor" {
 		t.Errorf("kept %q, want the first occurrence", got[0].Source)
+	}
+}
+
+// boundedFetcher is an in-memory fetcher that honours maxBodyBytes, so the truncation contract is
+// exercised behind the seam rather than only inside the HTTP implementation. The stub's job is to
+// behave like the interface documents, including the parts a map lookup would otherwise skip.
+type boundedFetcher struct {
+	body []byte
+	got  []int64
+}
+
+func (f *boundedFetcher) Fetch(_ context.Context, url string, maxBodyBytes int64) (Response, error) {
+	f.got = append(f.got, maxBodyBytes)
+	r := Response{FinalURL: url, Status: 200, ContentType: "text/html"}
+	if maxBodyBytes > 0 && int64(len(f.body)) > maxBodyBytes {
+		r.Body = f.body[:maxBodyBytes]
+		r.Truncated = true
+	} else {
+		r.Body = f.body
+	}
+	return r, nil
+}
+
+// The fetch call passes the bound through, and an oversized body comes back flagged rather than
+// silently shortened.
+func TestFetcherSetsTruncatedWhenBodyExceedsLimit(t *testing.T) {
+	big := make([]byte, 4096)
+	for i := range big {
+		big[i] = 'x'
+	}
+	f := &boundedFetcher{body: big}
+
+	resp, err := f.Fetch(context.Background(), "https://example.com/", 1024)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(resp.Body) != 1024 {
+		t.Errorf("body length = %d, want the bound 1024", len(resp.Body))
+	}
+	if !resp.Truncated {
+		t.Error("Truncated = false for a body that hit the bound")
+	}
+	if len(f.got) != 1 || f.got[0] != 1024 {
+		t.Errorf("fetcher received bounds %v, want [1024]", f.got)
+	}
+}
+
+func TestFetcherDoesNotSetTruncatedForABodyWithinTheLimit(t *testing.T) {
+	f := &boundedFetcher{body: []byte("small")}
+	resp, err := f.Fetch(context.Background(), "https://example.com/", 1024)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if resp.Truncated {
+		t.Error("Truncated = true for a body well within the bound")
+	}
+	if string(resp.Body) != "small" {
+		t.Errorf("body = %q, want the whole body", resp.Body)
+	}
+}
+
+// The resolver passes the HTML bound on every tier that fetches a page, so a caller cannot
+// accidentally request an unbounded body.
+func TestResolverBoundsEveryHTMLFetch(t *testing.T) {
+	f := &boundedFetcher{body: []byte("<html><head><title>Acme Corporation</title></head><body><h1>Acme</h1></body></html>")}
+	if _, err := (Resolver{Fetcher: f}).Resolve(context.Background(), "Acme Corporation", acmeHome); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(f.got) == 0 {
+		t.Fatal("no fetches were made")
+	}
+	for i, bound := range f.got {
+		if bound != HTMLMaxBodyBytes {
+			t.Errorf("fetch %d passed bound %d, want %d", i, bound, HTMLMaxBodyBytes)
+		}
 	}
 }
