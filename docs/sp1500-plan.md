@@ -365,12 +365,12 @@ enrichment join.
 **In:** fetch three pages → raw to disk → parse → upsert `companies` → `scrape_runs` → exit codes.
 
 **Out:** any careers/website resolution, any ATS work, any network beyond the three Wikipedia pages,
-`url_resolution_attempts` (that is `004`/M2).
+`url_resolution_attempts` (that is M2).
 
 M1 is fully deterministic and needs **no live network in tests** — the fixtures are the three
 recorded wikitext files.
 
-### 6.2 Migration `003_reference_platforms.sql` — structural only
+### 6.2 Migration `004_reference_platforms.sql` — structural only
 
 `platforms.platform_type` must gain `'reference'`, because `scrape_runs.platform_id` is `NOT NULL`
 and the run-row-first convention means every Wikipedia run needs a `platforms` row. `'reference'` is
@@ -418,7 +418,7 @@ set the precedent of seeds-in-their-own-migration. The plain `CREATE new / DROP 
 preserves child FK text under `legacy_alter_table=OFF`; it is FK *enforcement*, not reference
 rewriting, that blocks the naive form.
 
-### 6.3 Migration `005_company_enrichment.sql`
+### 6.3 Migration `006_company_enrichment.sql`
 
 ```sql
 ALTER TABLE companies ADD COLUMN ticker TEXT;
@@ -557,7 +557,7 @@ component table (the 601 regression).
 
 1. **Migration-runner change + its five tests** (own commit). The parser must never be debugged
    against a migration runner that is mid-change.
-2. `003` + `005`.
+2. `004` + `006`.
 3. Parser + fixtures + assertions.
 4. Upsert + `scrape_runs` + exit codes.
 
@@ -621,7 +621,7 @@ TestResolutionRunWritesScrapeRunOk
 TestResolutionIdempotentOnSecondRun
 ```
 
-### 7.4 Migration `004_url_resolution.sql` (M2)
+### 7.4 Migration `007_url_resolution.sql` (M2)
 
 ```sql
 CREATE TABLE url_resolution_attempts (
@@ -645,7 +645,7 @@ CREATE TABLE url_resolution_attempts (
 (per convention), then attempts.
 
 ATS seed rows `30–34`: `oraclecloud`, `eightfold`, `phenom`, `successfactors`, `taleo`. These are
-runtime-discovered vendors, so `004` is where that mapping belongs, not a pure-DDL migration.
+runtime-discovered vendors, so the M2 migration is where that mapping belongs, not a pure-DDL migration.
 
 ### 7.5 M3 — browser-use containment
 
@@ -790,7 +790,7 @@ None block M1 or M2a.
 
 1. **Implement M1 commit 1** — migration-runner FK-off support + the five runner tests. Nothing else
    is safe to build until this lands, because `003` cannot apply without it.
-2. Then `003` + `005`, then the parser + fixtures + assertions (`503 / 399 / 600 / 1,502`).
+2. Then `004` + `006`, then the parser + fixtures + assertions (`503 / 399 / 600 / 1,502`).
 3. Before starting M2, run §8.1 and §8.2 — they determine how much of the corpus is unreachable by
    deterministic means, and therefore whether M3 is justified at all.
 4. Run §8.3 before committing to the browser-use config.
