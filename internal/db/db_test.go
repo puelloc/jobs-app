@@ -54,6 +54,7 @@ func TestOpenCreatesEveryTable(t *testing.T) {
 		"platforms",
 		"schema_migrations",
 		"scrape_runs",
+		"url_resolution_attempts",
 	}
 	rows, err := database.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
 	if err != nil {
