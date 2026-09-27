@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 )
 
@@ -76,4 +77,40 @@ func UpsertBrowserJob(ctx context.Context, q Querier, j BrowserJob, companyID, d
 		return 0, false, fmt.Errorf("upsert browser job %s: %w", j.ExternalID, err)
 	}
 	return id, inserted, nil
+}
+
+// CompanyIDBySlug returns the companies id for a slug, or sql.ErrNoRows when there is no such row.
+func CompanyIDBySlug(ctx context.Context, q Querier, slug string) (int64, error) {
+	var id int64
+	if err := q.QueryRowContext(ctx, selectCompanyBySlugSQL, slug).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// PlatformIDByName returns the platforms id for a vendor name, or sql.ErrNoRows when unknown.
+func PlatformIDByName(ctx context.Context, q Querier, name string) (int64, error) {
+	var id int64
+	if err := q.QueryRowContext(ctx, `SELECT id FROM platforms WHERE name = ?`, name).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// ExternalID extracts a posting's stable id from its URL using the vendor's external_id_pattern
+// (one capture group). An empty or malformed pattern, or a URL the pattern does not match, falls
+// back to the URL itself, which is still a unique, stable key for the (discovery_platform_id,
+// external_id) partial index.
+func ExternalID(pattern, url string) string {
+	if pattern == "" {
+		return url
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil || re.NumSubexp() < 1 {
+		return url
+	}
+	if m := re.FindStringSubmatch(url); m != nil {
+		return m[1]
+	}
+	return url
 }

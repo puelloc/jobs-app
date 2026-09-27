@@ -100,3 +100,39 @@ func TestUpsertBrowserJob_EmptyOptionalsAreNull(t *testing.T) {
 		t.Errorf("optional columns should be NULL, got desc=%v location=%v raw=%v", desc, location, raw)
 	}
 }
+
+func TestExternalID(t *testing.T) {
+	cases := []struct {
+		pattern, url, want string
+	}{
+		{`careers/job/(\d+)`, "https://jobs.twilio.com/careers/job/1099552857643?x=1", "1099552857643"},
+		{`careers/job/(\d+)`, "https://jobs.twilio.com/careers/job/not-a-number", "https://jobs.twilio.com/careers/job/not-a-number"},
+		{"", "https://x.example/job/42", "https://x.example/job/42"},
+		{"no-capture-group", "https://x.example/job/42", "https://x.example/job/42"},
+	}
+	for _, c := range cases {
+		if got := ExternalID(c.pattern, c.url); got != c.want {
+			t.Errorf("ExternalID(%q, %q) = %q, want %q", c.pattern, c.url, got, c.want)
+		}
+	}
+}
+
+func TestCompanyAndPlatformLookup(t *testing.T) {
+	database := newTestDB(t)
+	ctx := context.Background()
+	if _, err := database.Exec(`INSERT INTO companies (id, slug, name) VALUES (7, 'twilio', 'Twilio')`); err != nil {
+		t.Fatalf("seed company: %v", err)
+	}
+
+	id, err := CompanyIDBySlug(ctx, database, "twilio")
+	if err != nil || id != 7 {
+		t.Errorf("CompanyIDBySlug(twilio) = %d, %v; want 7", id, err)
+	}
+	pid, err := PlatformIDByName(ctx, database, "eightfold")
+	if err != nil || pid != 31 {
+		t.Errorf("PlatformIDByName(eightfold) = %d, %v; want 31", pid, err)
+	}
+	if _, err := CompanyIDBySlug(ctx, database, "does-not-exist"); err == nil {
+		t.Error("CompanyIDBySlug(does-not-exist) should return sql.ErrNoRows")
+	}
+}

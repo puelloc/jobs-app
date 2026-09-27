@@ -28,6 +28,8 @@ One JSON file per vendor, committed to git. **The git diff of these files is the
   `unknown` (fall back to the generic guided agent).
 - `careers_pattern` — the URL shape a company's careers site takes for this vendor.
 - `api_hint` — where the board's own JSON/XML API lives, if known.
+- `external_id_pattern` — regex with one capture group that extracts the board's job id from a
+  posting URL; absent means "use the URL itself as the id".
 - `hints` — **ranked** selector fallbacks (most stable first). Each entry is a CSS selector or a
   `text:<substring>` / `aria-label:<substring>` prefix. Never a single brittle selector.
 - `gotchas` — natural-language notes, fed into the agent's task and read by humans.

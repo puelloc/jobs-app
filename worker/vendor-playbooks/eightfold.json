@@ -5,6 +5,7 @@
   "routing": "html_only",
   "careers_pattern": "jobs.<company>.com",
   "api_hint": "Eightfold search is client-side over a JSON API; the search URL query uses `query` and `filter_work_location_option=remote_local`",
+  "external_id_pattern": "careers/job/(\\d+)",
   "hints": {
     "listings_link": ["a[aria-label='See all open positions']", "text:See all open positions"],
     "search_box": ["input[data-testid='position-query-search-search']", "input[role='combobox']"],
