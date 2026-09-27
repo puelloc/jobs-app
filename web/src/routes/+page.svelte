@@ -1,7 +1,7 @@
 <script>
 	import { goto, invalidate } from '$app/navigation';
 	import { poll } from '$lib/poll.js';
-	import { postJob, postStopRun } from '$lib/api.js';
+	import { postJob, postPauseRun, postResumeRun, postStopRun } from '$lib/api.js';
 	import { formatDuration, formatRunStatus, formatUtc } from '$lib/format.js';
 
 	let { data } = $props();
@@ -36,6 +36,24 @@
 			triggerError = failure?.message ?? 'Could not stop the run';
 		} finally {
 			stopping = '';
+		}
+	}
+
+	let pausedRun = $state('');
+
+	async function togglePause(id) {
+		const idStr = String(id);
+		try {
+			if (pausedRun === idStr) {
+				await postResumeRun(id);
+				pausedRun = '';
+			} else {
+				await postPauseRun(id);
+				pausedRun = idStr;
+			}
+			await invalidate('data:runs');
+		} catch (failure) {
+			triggerError = failure?.message ?? 'Could not pause/resume the run';
 		}
 	}
 
@@ -103,7 +121,18 @@
 						<span class="dot" aria-hidden="true"></span>
 						<div class="run-main">
 							<span class="platform">{run.platform}</span>
-							<span class="badge badge-running">Running</span>
+							{#if pausedRun === String(run.id)}
+								<span class="badge badge-paused">Paused</span>
+							{:else}
+								<span class="badge badge-running">Running</span>
+							{/if}
+							<button
+								class="pause"
+								disabled={stopping !== ''}
+								onclick={() => togglePause(run.id)}
+							>
+								{pausedRun === String(run.id) ? 'resume' : 'pause'}
+							</button>
 							<button
 								class="stop"
 								disabled={stopping !== ''}
@@ -277,6 +306,24 @@
 		cursor: not-allowed;
 	}
 
+	.pause {
+		margin-left: 0.25rem;
+		padding: 0.05rem 0.5rem;
+		border: 1px solid #9a6b00;
+		border-radius: 6px;
+		background: #ffffff;
+		color: #9a6b00;
+		font-size: 0.75rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.pause:disabled {
+		border-color: #e4e7ec;
+		color: #8a9099;
+		cursor: not-allowed;
+	}
+
 	.trigger-row {
 		display: flex;
 		flex-wrap: wrap;
@@ -326,6 +373,10 @@
 
 	.badge-running {
 		color: #1a7f37;
+	}
+
+	.badge-paused {
+		color: #9a6b00;
 	}
 
 	.meta {

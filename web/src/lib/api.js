@@ -185,6 +185,24 @@ export async function postStopRun(id) {
 }
 
 /**
+ * Freeze a running job (SIGSTOP its process group); it can be resumed.
+ * @param {number|string} id
+ * @returns {Promise<{ run_id: number, paused: boolean }>}
+ */
+export async function postPauseRun(id) {
+	return postJSON(`/api/runs/${id}/pause`);
+}
+
+/**
+ * Resume a frozen job (SIGCONT its process group).
+ * @param {number|string} id
+ * @returns {Promise<{ run_id: number, paused: boolean }>}
+ */
+export async function postResumeRun(id) {
+	return postJSON(`/api/runs/${id}/resume`);
+}
+
+/**
  * A pipeline job's stdout log, for monitoring a non-agent job the way an agent
  * run is watched through its trace.
  * @param {number|string} id

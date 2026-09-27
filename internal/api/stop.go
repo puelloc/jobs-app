@@ -43,3 +43,52 @@ func handleStopRun(db *sql.DB, runner *jobRunner) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, StopResponse{RunID: id, Cancelled: true})
 	}
 }
+
+// PauseResponse is the POST /api/runs/{id}/pause|resume response.
+type PauseResponse struct {
+	RunID  int64 `json:"run_id"`
+	Paused bool  `json:"paused"`
+}
+
+// handlePauseRun serves POST /api/runs/{id}/pause: freeze the in-flight job (SIGSTOP its process
+// group). The run stays 'running'; it is just suspended.
+func handlePauseRun(db *sql.DB, runner *jobRunner) http.HandlerFunc {
+	return pauseResumeHandler(db, runner, true)
+}
+
+// handleResumeRun serves POST /api/runs/{id}/resume: unfreeze the in-flight job (SIGCONT).
+func handleResumeRun(db *sql.DB, runner *jobRunner) http.HandlerFunc {
+	return pauseResumeHandler(db, runner, false)
+}
+
+func pauseResumeHandler(db *sql.DB, runner *jobRunner, pause bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, codeBadRequest, "run id must be an integer")
+			return
+		}
+
+		var status string
+		if err := db.QueryRowContext(r.Context(),
+			`SELECT status FROM scrape_runs WHERE id = ?`, id).Scan(&status); err != nil {
+			if err == sql.ErrNoRows {
+				writeError(w, http.StatusNotFound, codeNotFound, fmt.Sprintf("no run with id %d", id))
+				return
+			}
+			writeInternalError(w, fmt.Errorf("read run %d: %w", id, err))
+			return
+		}
+		if status != "running" {
+			writeError(w, http.StatusConflict, codeConflict, fmt.Sprintf("run %d is not running", id))
+			return
+		}
+
+		if pause {
+			runner.pause()
+		} else {
+			runner.resume()
+		}
+		writeJSON(w, http.StatusOK, PauseResponse{RunID: id, Paused: runner.isPaused()})
+	}
+}

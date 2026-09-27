@@ -21,6 +21,7 @@ type jobRunner struct {
 	running bool
 	pgid    int
 	stopped bool
+	paused  bool
 }
 
 func (r *jobRunner) tryAcquire() bool {
@@ -31,6 +32,7 @@ func (r *jobRunner) tryAcquire() bool {
 	}
 	r.running = true
 	r.stopped = false
+	r.paused = false
 	return true
 }
 
@@ -38,6 +40,8 @@ func (r *jobRunner) release() {
 	r.mu.Lock()
 	r.running = false
 	r.pgid = 0
+	r.stopped = false
+	r.paused = false
 	r.mu.Unlock()
 }
 
@@ -74,4 +78,38 @@ func (r *jobRunner) isStopped() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.stopped
+}
+
+// pause freezes the in-flight job's whole process group (SIGSTOP). The process is suspended in
+// place: CPU is freed, memory is retained, and resume() continues it exactly where it was.
+func (r *jobRunner) pause() {
+	r.mu.Lock()
+	pgid := r.pgid
+	if pgid == 0 {
+		r.mu.Unlock()
+		return
+	}
+	r.paused = true
+	r.mu.Unlock()
+	_ = syscall.Kill(-pgid, syscall.SIGSTOP)
+}
+
+// resume unfreezes the in-flight job's process group (SIGCONT).
+func (r *jobRunner) resume() {
+	r.mu.Lock()
+	if !r.paused || r.pgid == 0 {
+		r.mu.Unlock()
+		return
+	}
+	pgid := r.pgid
+	r.paused = false
+	r.mu.Unlock()
+	_ = syscall.Kill(-pgid, syscall.SIGCONT)
+}
+
+// isPaused reports whether the current job is frozen.
+func (r *jobRunner) isPaused() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.paused
 }
