@@ -28,7 +28,10 @@ import (
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 type probeAnswer struct {
-	ListingsURL string `json:"listings_url"`
+	ListingsURL             string `json:"listings_url"`
+	HasRemoteSoftwareRoles  bool   `json:"has_remote_software_roles"`
+	RemoteSoftwareRoleCount int    `json:"remote_software_role_count"`
+	Evidence                string `json:"evidence"`
 }
 
 type probeOutput struct {
@@ -50,7 +53,8 @@ type fetchJob struct {
 }
 
 type fetchOutput struct {
-	Jobs []fetchJob `json:"jobs"`
+	Jobs       []fetchJob `json:"jobs"`
+	TotalLinks int        `json:"total_links"`
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -167,9 +171,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if !probe.OK || probe.Answer == nil || probe.Answer.ListingsURL == "" {
 		finish("ok", 0, 0, 0, "")
-		fmt.Fprintf(stdout, "run_id=%d company=%s listings=none found=0\n", runID, company.Slug)
+		evidence := ""
+		if probe.Answer != nil {
+			evidence = probe.Answer.Evidence
+		}
+		fmt.Fprintf(stdout, "run_id=%d company=%s listings=none found=0 evidence=%q\n",
+			runID, company.Slug, evidence)
 		return 0
 	}
+
+	// Log what the agent decided: its evidence and the count it saw, so a later zero is diagnosable.
+	fmt.Fprintf(stdout, "run_id=%d company=%s agent: has_remote=%t count=%d evidence=%q\n",
+		runID, company.Slug, probe.Answer.HasRemoteSoftwareRoles,
+		probe.Answer.RemoteSoftwareRoleCount, probe.Answer.Evidence)
 
 	// 2. Fetch: honor the listings origin's robots.txt too, then render and extract.
 	listingsPolicy, err := robots.Fetch(ctx, httpClient, probe.Answer.ListingsURL, cfg.UserAgent)
@@ -211,6 +225,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "scrape: parse fetch output: %v\n", err)
 		return 1
 	}
+	// Diagnose a zero: how many links were on the rendered page vs how many the heuristic kept.
+	fmt.Fprintf(stdout, "run_id=%d company=%s fetch: page_links=%d extracted=%d\n",
+		runID, company.Slug, fetched.TotalLinks, len(fetched.Jobs))
 
 	extPattern := externalIDPattern(*vendor)
 

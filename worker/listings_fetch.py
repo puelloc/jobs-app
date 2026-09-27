@@ -176,6 +176,7 @@ def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
     started = time.monotonic()
 
     jobs: list[dict] = []
+    total_links = 0
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True, args=_browser_args() or None)
         try:
@@ -192,6 +193,7 @@ def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
                 "() => Array.from(document.querySelectorAll('a[href]')).map(a => "
                 "({href: a.href, text: (a.innerText || a.getAttribute('aria-label') || '').trim()}))"
             )
+            total_links = len(anchors)
 
             picked: list[dict] = []
             seen: set[str] = set()
@@ -258,6 +260,7 @@ def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
     return {
         "listings_url": listings_url,
         "found": len(jobs),
+        "total_links": total_links,
         "elapsed_sec": round(time.monotonic() - started, 1),
         "jobs": jobs,
     }
