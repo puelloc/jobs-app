@@ -70,6 +70,9 @@ services:
       - "8095:8080"   # web UI: http://<nas-ip>:8095
     environment:
       NODE_ENV: production
+      # adapter-node defaults to 3000; the compose port mapping and healthcheck
+      # both expect 8080, so pin it.
+      PORT: "8080"
       # The UI proxies /api/* to the Go API (src/routes/api/[...path]/+server.js).
       JOBS_API: http://app:8080
       TZ: ${TZ:-America/Chicago}
