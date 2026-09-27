@@ -1,16 +1,13 @@
 <script>
 	import { invalidate } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { poll } from '$lib/poll.js';
 
 	let { data } = $props();
 
 	const log = $derived(data.log ?? '');
 
 	// Poll so the tail follows a running job without a manual refresh.
-	onMount(() => {
-		const timer = setInterval(() => invalidate('data:serverlog'), 3000);
-		return () => clearInterval(timer);
-	});
+	poll(() => invalidate('data:serverlog'));
 </script>
 
 <svelte:head>

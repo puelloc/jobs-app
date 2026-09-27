@@ -1,6 +1,6 @@
 <script>
 	import { invalidate } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { poll } from '$lib/poll.js';
 	import {
 		formatDuration,
 		formatRunStatus,
@@ -25,10 +25,7 @@
 
 	// Poll the load function so live agent steps and a status change show up
 	// without a manual refresh. invalidate() re-runs load on the client only.
-	onMount(() => {
-		const timer = setInterval(() => invalidate('data:run'), 3000);
-		return () => clearInterval(timer);
-	});
+	poll(() => invalidate('data:run'));
 </script>
 
 <svelte:head>

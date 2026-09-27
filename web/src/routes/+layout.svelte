@@ -1,5 +1,6 @@
 <script>
 	import { page } from '$app/state';
+	import { refreshMs } from '$lib/refresh.js';
 
 	let { children } = $props();
 
@@ -36,6 +37,20 @@
 				aria-current={isActive('/logs') ? 'page' : undefined}>Logs</a
 			>
 		</nav>
+		<label class="refresh">
+			Refresh
+			<select
+				value={$refreshMs}
+				onchange={(e) => refreshMs.set(Number(e.currentTarget.value))}
+			>
+				<option value={1000}>1s</option>
+				<option value={2000}>2s</option>
+				<option value={3000}>3s</option>
+				<option value={5000}>5s</option>
+				<option value={10000}>10s</option>
+				<option value={30000}>30s</option>
+			</select>
+		</label>
 	</header>
 	{@render children()}
 </div>
@@ -107,5 +122,23 @@
 	.nav a.active {
 		color: #ffffff;
 		background: rgba(255, 255, 255, 0.12);
+	}
+
+	.refresh {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		margin-left: auto;
+		color: #c3c9d4;
+		font-size: 0.82rem;
+	}
+
+	.refresh select {
+		padding: 0.15rem 0.35rem;
+		border: 1px solid rgba(255, 255, 255, 0.25);
+		border-radius: 6px;
+		background: rgba(255, 255, 255, 0.1);
+		color: #ffffff;
+		font-size: 0.82rem;
 	}
 </style>

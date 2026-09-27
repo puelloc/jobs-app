@@ -1,6 +1,6 @@
 <script>
 	import { goto, invalidate } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { poll } from '$lib/poll.js';
 	import { postJob, postStopRun } from '$lib/api.js';
 	import { formatDuration, formatRunStatus, formatUtc } from '$lib/format.js';
 
@@ -60,10 +60,7 @@
 
 	// Poll the load function so in-flight runs and new finishes show up without
 	// a manual refresh. invalidate() re-runs load on the client only.
-	onMount(() => {
-		const timer = setInterval(() => invalidate('data:runs'), 5000);
-		return () => clearInterval(timer);
-	});
+	poll(() => invalidate('data:runs'));
 </script>
 
 <svelte:head>
