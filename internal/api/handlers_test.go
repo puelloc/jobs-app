@@ -168,7 +168,7 @@ INSERT INTO job_listings (
 		}
 	}
 
-	return NewRouter(database)
+	return NewRouter(database, t.TempDir())
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -651,5 +651,5 @@ func newTestServerAndDB(t *testing.T) (http.Handler, *sql.DB) {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	return NewRouter(database), database
+	return NewRouter(database, t.TempDir()), database
 }

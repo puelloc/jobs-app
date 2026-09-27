@@ -49,7 +49,7 @@ func run() int {
 
 	srv := &http.Server{
 		Addr:              cfg.ServerAddr,
-		Handler:           api.NewRouter(database),
+		Handler:           api.NewRouter(database, cfg.DataDir),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

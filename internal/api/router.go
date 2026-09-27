@@ -16,7 +16,7 @@ import (
 // NewRouter returns the read-only HTTP handler for the job viewer API.
 // Unknown paths answer 404 and a non-GET method on a known path answers 405,
 // both in the envelope defined by types.go.
-func NewRouter(db *sql.DB) http.Handler {
+func NewRouter(db *sql.DB, dataDir string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/jobs", handleListJobs(db))
 	mux.HandleFunc("GET /api/jobs/{id}", handleGetJob(db))
@@ -26,6 +26,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	mux.HandleFunc("GET /api/companies/churn", handleListChurn(db))
 	mux.HandleFunc("GET /api/companies/{id}", handleGetCompany(db))
 	mux.HandleFunc("GET /api/runs", handleListRuns(db))
+	mux.HandleFunc("GET /api/traces/{id}", handleGetTrace(dataDir))
 
 	// Deliberately no catch-all pattern: registering "/" would match every
 	// method, and the mux would then serve it for POST /api/jobs instead of

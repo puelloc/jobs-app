@@ -7,6 +7,8 @@
 // "absent from the contract" apart from "present and null".
 package api
 
+import "encoding/json"
+
 // JobListItem is one entry of the GET /api/jobs response.
 type JobListItem struct {
 	ID             int64   `json:"id"`
@@ -198,4 +200,13 @@ type RunListResponse struct {
 	Limit  int           `json:"limit"`
 	Offset int           `json:"offset"`
 	Total  int64         `json:"total"`
+}
+
+// TraceResponse is the GET /api/traces/{id} response: the agent-trace events written so far, plus
+// whether the file exists yet. The UI polls this while a run is in flight, so "not present yet" is a
+// normal, non-error state. Events are raw JSON objects - the trace schema belongs to the worker.
+type TraceResponse struct {
+	ID      string            `json:"id"`
+	Present bool              `json:"present"`
+	Events  []json.RawMessage `json:"events"`
 }
