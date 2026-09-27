@@ -20,6 +20,7 @@
 /.venv-browser/
 /.playwright/
 /.browseruse/
+__pycache__/
 
 # Ad-hoc browser profiles and scratch output from one-off checks (~1,000 vendored extension
 # files). Throwaway artifacts, not source.
