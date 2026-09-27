@@ -553,3 +553,276 @@ func TestBatchTitlesAreURLEncoded(t *testing.T) {
 		t.Error("redirects=1 is missing, so an alias title would not resolve")
 	}
 }
+
+// --- redirect and normalisation aliasing ----------------------------------
+
+// wikipediaBodyWithAliases builds a response that reports a normalisation and a redirect, using the
+// shape MediaWiki actually returns: the pages array holds only the final title, and the mapping from
+// the requested title back to it lives in the query.normalized and query.redirects arrays.
+func wikipediaBodyWithAliases(pages, normalized, redirects map[string]string) []byte {
+	var pageList []any
+	for title, text := range pages {
+		pageList = append(pageList, map[string]any{
+			"title": title,
+			"revisions": []any{
+				map[string]any{"slots": map[string]any{"main": map[string]any{"content": text}}},
+			},
+		})
+	}
+	query := map[string]any{"pages": pageList}
+	if len(normalized) > 0 {
+		var list []any
+		for from, to := range normalized {
+			list = append(list, map[string]any{"from": from, "to": to})
+		}
+		query["normalized"] = list
+	}
+	if len(redirects) > 0 {
+		var list []any
+		for from, to := range redirects {
+			list = append(list, map[string]any{"from": from, "to": to})
+		}
+		query["redirects"] = list
+	}
+	body, _ := json.Marshal(map[string]any{"query": query})
+	return body
+}
+
+// wikidataBodyWithRedirects builds a response keyed by QID whose sitelink carries the redirect
+// target, with a query.redirects array mapping the requested title onto it.
+func wikidataBodyWithRedirects(values map[string][]Candidate, redirects map[string]string) []byte {
+	entities := map[string]any{}
+	i := 0
+	for title, candidates := range values {
+		qid := fmt.Sprintf("Q%d", 2000+i)
+		i++
+		var claims []any
+		for _, c := range candidates {
+			claims = append(claims, map[string]any{
+				"mainsnak": map[string]any{
+					"datavalue": map[string]any{"value": c.URL, "type": "string"},
+				},
+				"rank": c.Rank,
+			})
+		}
+		entities[qid] = map[string]any{
+			"claims":    map[string]any{"P856": claims},
+			"sitelinks": map[string]any{"enwiki": map[string]any{"title": title}},
+		}
+	}
+	body := map[string]any{"entities": entities}
+	if len(redirects) > 0 {
+		var list []any
+		for from, to := range redirects {
+			list = append(list, map[string]any{"from": from, "to": to})
+		}
+		body["query"] = map[string]any{"redirects": list}
+	}
+	out, _ := json.Marshal(body)
+	return out
+}
+
+// A redirect must not lose the company's homepage.
+//
+// The company's article title is the key the run looks the result up by, and it is the title that was
+// requested. When MediaWiki resolves "AMD" to "Advanced Micro Devices" it reports the page under the
+// target title and the mapping in query.redirects. An implementation that keys results by the
+// returned page title answers "Advanced Micro Devices" and leaves the company, which asked about
+// "AMD", with no homepage at all - so the whole of tier 1 silently does nothing for every company
+// whose article is a redirect or a normalisation variant. That is 562 of 1,498 companies in the
+// full run, and it presents as "no homepage" rather than as an error.
+func TestWikipediaResultIsKeyedByTheRequestedTitleWhenTheArticleRedirects(t *testing.T) {
+	stub := newAPIStub(func(kind, titles string) (int, []byte) {
+		switch kind {
+		case "query":
+			return 200, wikipediaBodyWithAliases(
+				map[string]string{"Advanced Micro Devices": "{{Infobox company\n| website = {{URL|https://www.amd.com}}\n}}"},
+				nil,
+				map[string]string{"AMD": "Advanced Micro Devices"},
+			)
+		default:
+			return 200, []byte(`{"entities":{}}`)
+		}
+	})
+	srv := stub.server(t)
+	defer srv.Close()
+
+	c := &Client{Fetcher: stubFetch{wikipedia: srv.URL, wikidata: srv.URL},
+		Wikipedia: srv.URL, Wikidata: srv.URL}
+	got, err := c.Resolve(context.Background(), []string{"AMD"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	res, ok := got["AMD"]
+	if !ok {
+		t.Fatalf("no result for the requested title \"AMD\"; the redirect target was used as the key. got keys %v", keysOf(got))
+	}
+	if res.URL != "https://www.amd.com" {
+		t.Errorf("URL = %q, want https://www.amd.com", res.URL)
+	}
+}
+
+// The same aliasing, but for the normalisation MediaWiki applies before a redirect: the requested
+// title is not a redirect, it is a variant spelling that the API rewrites to the canonical title.
+func TestWikipediaResultIsKeyedByTheRequestedTitleWhenTheTitleIsNormalised(t *testing.T) {
+	stub := newAPIStub(func(kind, titles string) (int, []byte) {
+		switch kind {
+		case "query":
+			return 200, wikipediaBodyWithAliases(
+				map[string]string{"Nike, Inc.": "{{Infobox company\n| website = https://about.nike.com\n}}"},
+				map[string]string{"nike_inc": "Nike, Inc."},
+				nil,
+			)
+		default:
+			return 200, []byte(`{"entities":{}}`)
+		}
+	})
+	srv := stub.server(t)
+	defer srv.Close()
+
+	c := &Client{Fetcher: stubFetch{wikipedia: srv.URL, wikidata: srv.URL},
+		Wikipedia: srv.URL, Wikidata: srv.URL}
+	got, err := c.Resolve(context.Background(), []string{"nike_inc"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	res, ok := got["nike_inc"]
+	if !ok {
+		t.Fatalf("no result for the requested title \"nike_inc\"; got keys %v", keysOf(got))
+	}
+	if res.URL != "https://about.nike.com" {
+		t.Errorf("URL = %q, want https://about.nike.com", res.URL)
+	}
+}
+
+// Wikidata reports redirects the same way, and the entity's sitelink carries the target title. The
+// result must still be keyed by the title the run asked for.
+func TestWikidataResultIsKeyedByTheRequestedTitleWhenTheArticleRedirects(t *testing.T) {
+	stub := newAPIStub(func(kind, titles string) (int, []byte) {
+		switch kind {
+		case "wbgetentities":
+			return 200, wikidataBodyWithRedirects(
+				map[string][]Candidate{"Advance Auto Parts": {{URL: "https://shop.advanceautoparts.com", Rank: "preferred"}}},
+				map[string]string{"Advance Auto Parts, Inc.": "Advance Auto Parts"},
+			)
+		default:
+			return 200, wikipediaBody(nil)
+		}
+	})
+	srv := stub.server(t)
+	defer srv.Close()
+
+	c := &Client{Fetcher: stubFetch{wikipedia: srv.URL, wikidata: srv.URL},
+		Wikipedia: srv.URL, Wikidata: srv.URL}
+	got, err := c.Resolve(context.Background(), []string{"Advance Auto Parts, Inc."})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	res, ok := got["Advance Auto Parts, Inc."]
+	if !ok {
+		t.Fatalf("no result for the requested title; got keys %v", keysOf(got))
+	}
+	if res.URL != "https://shop.advanceautoparts.com" {
+		t.Errorf("URL = %q, want https://shop.advanceautoparts.com", res.URL)
+	}
+}
+
+// A chain of redirects must be followed to the end, not just one hop. MediaWiki emits one entry per
+// hop, so a title that redirects twice appears twice and a single-hop lookup stops in the middle.
+func TestWikipediaResultFollowsAChainOfRedirects(t *testing.T) {
+	stub := newAPIStub(func(kind, titles string) (int, []byte) {
+		switch kind {
+		case "query":
+			return 200, wikipediaBodyWithAliases(
+				map[string]string{"Alphabet Inc.": "{{Infobox company\n| website = https://abc.xyz\n}}"},
+				nil,
+				map[string]string{"Google": "Google LLC", "Google LLC": "Alphabet Inc."},
+			)
+		default:
+			return 200, []byte(`{"entities":{}}`)
+		}
+	})
+	srv := stub.server(t)
+	defer srv.Close()
+
+	c := &Client{Fetcher: stubFetch{wikipedia: srv.URL, wikidata: srv.URL},
+		Wikipedia: srv.URL, Wikidata: srv.URL}
+	got, err := c.Resolve(context.Background(), []string{"Google"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	res, ok := got["Google"]
+	if !ok {
+		t.Fatalf("no result for \"Google\" after a two-hop redirect; got keys %v", keysOf(got))
+	}
+	if res.URL != "https://abc.xyz" {
+		t.Errorf("URL = %q, want https://abc.xyz", res.URL)
+	}
+}
+
+// A title that is both normalised and redirected must survive both steps.
+func TestWikipediaResultSurvivesNormalisationThenRedirect(t *testing.T) {
+	stub := newAPIStub(func(kind, titles string) (int, []byte) {
+		switch kind {
+		case "query":
+			return 200, wikipediaBodyWithAliases(
+				map[string]string{"Alphabet Inc.": "{{Infobox company\n| website = https://abc.xyz\n}}"},
+				map[string]string{"google": "Google"},
+				map[string]string{"Google": "Alphabet Inc."},
+			)
+		default:
+			return 200, []byte(`{"entities":{}}`)
+		}
+	})
+	srv := stub.server(t)
+	defer srv.Close()
+
+	c := &Client{Fetcher: stubFetch{wikipedia: srv.URL, wikidata: srv.URL},
+		Wikipedia: srv.URL, Wikidata: srv.URL}
+	got, err := c.Resolve(context.Background(), []string{"google"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, ok := got["google"]; !ok {
+		t.Fatalf("no result for \"google\" after normalisation plus redirect; got keys %v", keysOf(got))
+	}
+}
+
+// The article recorded on the result stays the canonical title, because that is what the audit trail
+// and the later Wikidata lookups need; only the map key changes.
+func TestRedirectResultKeepsTheCanonicalArticleTitle(t *testing.T) {
+	stub := newAPIStub(func(kind, titles string) (int, []byte) {
+		switch kind {
+		case "query":
+			return 200, wikipediaBodyWithAliases(
+				map[string]string{"Advanced Micro Devices": "{{Infobox company\n| website = {{URL|https://www.amd.com}}\n}}"},
+				nil,
+				map[string]string{"AMD": "Advanced Micro Devices"},
+			)
+		default:
+			return 200, []byte(`{"entities":{}}`)
+		}
+	})
+	srv := stub.server(t)
+	defer srv.Close()
+
+	c := &Client{Fetcher: stubFetch{wikipedia: srv.URL, wikidata: srv.URL},
+		Wikipedia: srv.URL, Wikidata: srv.URL}
+	got, err := c.Resolve(context.Background(), []string{"AMD"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res := got["AMD"]; res.Article != "Advanced Micro Devices" {
+		t.Errorf("Article = %q, want the canonical title Advanced Micro Devices", res.Article)
+	}
+}
+
+// keysOf returns the map's keys for a failure message, so a broken key is visible rather than
+// inferred from a bare "not found".
+func keysOf(m map[string]Result) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

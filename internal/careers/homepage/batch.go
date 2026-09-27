@@ -155,15 +155,22 @@ func (c *Client) WikidataWebsites(ctx context.Context, titles []string) (map[str
 		if err := json.Unmarshal(resp.Body, &decoded); err != nil {
 			return nil, fmt.Errorf("wikidata decode: %w", err)
 		}
+		aliases := aliasMap(decoded.Query.Normalized, decoded.Query.Redirects)
+		byCanonical := reverseAliases(aliases)
 		for qid, entity := range decoded.Entities {
-			// The response is keyed by QID, so the title has to be recovered from the sitelink.
+			// The response is keyed by QID, so the title has to be recovered from the sitelink. That
+			// title is the canonical one, which for a redirect is not the title the caller asked
+			// about, so it is mapped back before being used as the key.
 			title := entity.Sitelinks.Enwiki.Title
 			if title == "" {
 				continue
 			}
-			out[title] = &Entity{
-				QID:       qid,
-				Article:   title,
+			key := requestTitle(title, byCanonical, batch)
+			out[key] = &Entity{
+				QID:     qid,
+				Article: title,
+				// The sitelink title is recorded on the entity so the two sources can be compared,
+				// but the caller reaches it through key.
 				Homepages: p856Candidates(entity),
 			}
 		}
@@ -194,6 +201,18 @@ func p856Candidates(e wikidataEntity) []Candidate {
 
 type wikidataResponse struct {
 	Entities map[string]wikidataEntity `json:"entities"`
+	// Query carries the normalisation and redirect mappings, which say which requested title a
+	// returned sitelink title actually answers.
+	Query struct {
+		Normalized []titleMapping `json:"normalized"`
+		Redirects  []titleMapping `json:"redirects"`
+	} `json:"query"`
+}
+
+// titleMapping is one from/to pair in the query.normalized or query.redirects array.
+type titleMapping struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 type wikidataEntity struct {
@@ -258,6 +277,7 @@ func (c *Client) WikipediaWebsites(ctx context.Context, titles []string) (map[st
 		if err := json.Unmarshal(resp.Body, &decoded); err != nil {
 			return nil, fmt.Errorf("wikipedia decode: %w", err)
 		}
+		byCanonical := reverseAliases(aliasMap(decoded.Query.Normalized, decoded.Query.Redirects))
 		for _, page := range decoded.Query.Pages {
 			if page.Missing {
 				continue
@@ -270,7 +290,9 @@ func (c *Client) WikipediaWebsites(ctx context.Context, titles []string) (map[st
 			if raw == "" {
 				continue
 			}
-			out[page.Title] = &InfoboxWebsite{URL: raw, Article: page.Title}
+			// The result is filed under the title the caller asked about, not the title MediaWiki
+			// returned it under, because the caller looks it up by the former.
+			out[requestTitle(page.Title, byCanonical, batch)] = &InfoboxWebsite{URL: raw, Article: page.Title}
 		}
 	}
 	return out, nil
@@ -278,7 +300,12 @@ func (c *Client) WikipediaWebsites(ctx context.Context, titles []string) (map[st
 
 type wikipediaResponse struct {
 	Query struct {
-		Pages []struct {
+		// Normalized and Redirects map a requested title onto the title the page is returned under.
+		// Without them a redirect loses the company: the page arrives under the target title, and a
+		// caller looking up the title it asked about finds nothing.
+		Normalized []titleMapping `json:"normalized"`
+		Redirects  []titleMapping `json:"redirects"`
+		Pages      []struct {
 			Title     string `json:"title"`
 			Missing   bool   `json:"missing"`
 			Revisions []struct {
@@ -290,6 +317,67 @@ type wikipediaResponse struct {
 			} `json:"revisions"`
 		} `json:"pages"`
 	} `json:"query"`
+}
+
+// aliasMap merges the normalized and redirects arrays into one from/to lookup. The two are applied
+// in that order by MediaWiki, so normalisation is added first and a redirect to a normalised title
+// still resolves.
+func aliasMap(normalized, redirects []titleMapping) map[string]string {
+	out := make(map[string]string, len(normalized)+len(redirects))
+	for _, m := range normalized {
+		if m.From != "" {
+			out[m.From] = m.To
+		}
+	}
+	for _, m := range redirects {
+		if m.From != "" {
+			out[m.From] = m.To
+		}
+	}
+	return out
+}
+
+// requestTitle maps a canonical title back to the title the batch actually asked about.
+//
+// The run keys its homepage lookups by the company's article title, so a result filed under the
+// canonical title is unreachable and the company looks like it has no homepage. Walking the alias
+// chain backwards recovers the requested title; a chain of any length is followed, because a title
+// can be normalised and then redirected more than once. A canonical title that no requested title
+// leads to - which happens when the response answers a title the caller did not ask for - is left
+// alone rather than being forced onto an unrelated title.
+func requestTitle(canonical string, byCanonical map[string]string, requested []string) string {
+	asked := make(map[string]bool, len(requested))
+	for _, t := range requested {
+		asked[t] = true
+	}
+
+	title := canonical
+	// The bound is the map size: every step consumes a distinct alias, so a chain cannot be longer
+	// than the mapping without a cycle.
+	for i := 0; i < len(byCanonical); i++ {
+		prev, ok := byCanonical[title]
+		if !ok {
+			break
+		}
+		title = prev
+	}
+	if asked[title] {
+		return title
+	}
+	// The chain did not lead back to anything in this batch. Fall back to the canonical title so
+	// the value is not lost, even though the caller may not look it up.
+	return canonical
+}
+
+// reverseAliases inverts a from/to alias map so a canonical title can be traced back to a requested
+// one. Where two requested titles share a canonical target the last one wins, which is a tie the
+// caller cannot lose: either title reaches the same result.
+func reverseAliases(aliases map[string]string) map[string]string {
+	out := make(map[string]string, len(aliases))
+	for from, to := range aliases {
+		out[to] = from
+	}
+	return out
 }
 
 // websiteFieldRE finds the infobox's website parameter. The value runs to the end of the line, which
