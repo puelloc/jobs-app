@@ -882,6 +882,7 @@ adversarial re-testing, and several were stated confidently before being overtur
 | `ai.siggy-lab.org` is an internet-exposed Ollama | Resolves to `192.168.50.76` (RFC1918); the probe only worked because this machine is on that network | DNS + address-family check (the error was inferring reachability from probe success) |
 | "Qwen3 27B" is not a real tag | It is real: `qwen3.8-27b-64k:latest` | `GET /api/tags` on the live host |
 | The model may not do structured actions at all | It emits a valid nested-argument tool call | `POST /api/chat` with a tools schema |
+| "632 resolved" in the full run means 632 working careers URLs | 632 is the **stored** count. A 2026-09-27 census of all 632 stored URLs found 529 (35.3%) reachable careers pages, 54 (3.6%) provably wrong pages, and 49 (3.3%) unverifiable (blocked/dead to a plain client). The 42.2% headline was the stored share, not a working share. | Fetching every stored URL and classifying by content; `docs/runs/2026-09-26-full.md` |
 
 ### Recurring failure modes
 
