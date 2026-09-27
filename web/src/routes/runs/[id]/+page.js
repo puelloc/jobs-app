@@ -5,19 +5,19 @@ import { getRun, getTrace } from '$lib/api.js';
 // trace written so far. The page then re-runs this load on an interval to pick
 // up live agent steps while the run is in flight.
 /** @type {import('./$types').PageLoad} */
-export async function load({ params, url, depends }) {
+export async function load({ params, fetch, depends }) {
 	depends('data:run');
 
 	let run;
 	try {
-		run = await getRun(params.id, { origin: url.origin });
+		run = await getRun(params.id, { fetch });
 	} catch (failure) {
 		error(failure?.status ?? 500, failure?.message ?? 'Could not load run');
 	}
 
 	let trace = { present: false, events: [] };
 	try {
-		trace = await getTrace(params.id, { origin: url.origin });
+		trace = await getTrace(params.id, { fetch });
 	} catch {
 		// A trace read that fails is not a page failure: the run still renders,
 		// and the poll retries once the browser takes over.

@@ -1,15 +1,12 @@
-# jobs-app stack: Go API + browser-use worker (one image, several commands).
-# Data lives in ./data (gitignored) and persists across recreations.
+# jobs-app stack: Go API + browser-use worker (one image, several commands) and
+# the SvelteKit UI (a second image). Data lives in ./data (gitignored) and
+# persists across recreations.
 #
-# Only the API is a long-running service. classify/scrape/batch are one-off jobs
-# run against the same image and volume:
+# The API is a long-running service; classify/scrape/batch are one-off jobs run
+# against the same image and volume:
 #   docker compose run --rm app classify -commit
 #   docker compose run --rm app scrape -slug twilio -vendor eightfold
 #   docker compose run --rm app batch
-#
-# The web UI (web/) is dev-only for now (adapter-auto, no production adapter),
-# so it is not yet a service here. The API is exposed directly on the host port
-# below until the UI workstream adds adapter-node.
 #
 # ./data must be writable by PUID (default 1000): the server and every one-off
 # job create and own jobs.db there. scripts/deploy.sh creates the directory and
@@ -34,7 +31,7 @@ services:
         max-file: "3"
 
     ports:
-      - "8094:8080"   # API: http://<nas-ip>:8094/api/runs
+      - "8094:8080"   # API (also reached by the UI over the compose network)
     environment:
       TZ: ${TZ:-America/Chicago}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -53,6 +50,36 @@ services:
     shm_size: "1gb"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/runs"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  ui:
+    build: ./web
+    container_name: jobs_ui
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    depends_on:
+      - app
+    ports:
+      - "8095:8080"   # web UI: http://<nas-ip>:8095
+    environment:
+      NODE_ENV: production
+      # The UI proxies /api/* to the Go API (src/routes/api/[...path]/+server.js).
+      JOBS_API: http://app:8080
+      TZ: ${TZ:-America/Chicago}
+    healthcheck:
+      # node:slim has no wget; use Node's built-in fetch instead.
+      test:
+        - CMD
+        - node
+        - -e
+        - "process.exitCode=0;fetch('http://127.0.0.1:8080/').then(r=>process.exitCode=r.ok?0:1).catch(()=>process.exitCode=1)"
       interval: 30s
       timeout: 5s
       retries: 3

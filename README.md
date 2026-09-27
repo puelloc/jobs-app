@@ -26,7 +26,7 @@ one contributor among several, not a special case.
 | **`docs/scraping-plan.md`** | **the next workstream**: fetching listings from the resolved careers sites |
 | `docs/browser-use-worker.md` | the Go ↔ Python browser-use worker contract |
 | `internal/db/MIGRATIONS.md` | the migration conventions and the one-off script rule |
-| `web/README.md` | the read-only web dashboard (runs, companies, jobs) |
+| `web/README.md` | the web dashboard (runs, companies, jobs, scrape trigger, live agent traces) |
 
 Run reports live in `docs/runs/`, one file per real-network run, with the numbers read back from the
 database rather than from a command's summary line.
@@ -52,9 +52,9 @@ go build ./... && go test ./...
 
 ## Deploy to the NAS (Docker)
 
-The whole app runs in one image (`Dockerfile`): the Go binaries plus the Python browser-use worker
-and its pinned Chromium. `server` is the long-running service; `classify`, `scrape`, and `batch` run
-as one-off jobs against the same `./data` volume.
+Two images: the Go API + browser-use worker (`Dockerfile`), and the SvelteKit UI (`web/Dockerfile`).
+`server` and the UI are long-running services; `classify`, `scrape`, and `batch` run as one-off jobs
+against the same `./data` volume.
 
 ```
 ./scripts/deploy.sh          # git pull + rebuild + rolling restart + verify
@@ -62,7 +62,7 @@ as one-off jobs against the same `./data` volume.
 
 That script handles the `PUID`/`PGID` ownership of `./data` (SQLite must be writable by the
 container user), rebuilds with `docker compose up -d --build --remove-orphans`, and reports any
-restart-loop or API failure. The API is exposed on host port `8094`.
+restart-loop or API failure. The API is on host port `8094`, the UI on `8095`.
 
 Run the scrape jobs from the repo root:
 
@@ -77,8 +77,8 @@ the model host sees one browser agent. Before a full sweep, run `classify -commi
 has a recorded vendor (the scrape trigger refuses unclassified companies). The `./data` volume carries
 `jobs.db` and the per-run agent traces across recreations.
 
-The web UI (`web/`) is dev-only until its workstream switches it to a production adapter; it is not
-yet a compose service.
+The UI talks to the API over the compose network (it proxies `/api/*` to `app:8080`); it does not
+need the API host port exposed, which is kept for direct `curl` use.
 
 ## Known issues
 

@@ -5,7 +5,7 @@ import { getCompanies } from '$lib/api.js';
 // the directory. Filters come from the URL (the filter bar is a plain GET form),
 // so a filter change is a normal navigation that re-runs this load.
 /** @type {import('./$types').PageLoad} */
-export async function load({ url, depends }) {
+export async function load({ url, fetch, depends }) {
 	depends('data:companies');
 
 	const index = url.searchParams.get('index') ?? '';
@@ -14,10 +14,7 @@ export async function load({ url, depends }) {
 
 	let data;
 	try {
-		data = await getCompanies(
-			{ limit: 25, offset: 0, index, resolution, search },
-			{ origin: url.origin }
-		);
+		data = await getCompanies({ limit: 25, offset: 0, index, resolution, search }, { fetch });
 	} catch (failure) {
 		error(failure?.status ?? 500, failure?.message ?? 'Could not load companies');
 	}

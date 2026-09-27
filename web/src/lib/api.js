@@ -5,12 +5,11 @@
  * No retries, no timeouts beyond the browser's own, and no reactive state -
  * load() functions import this module and nothing else does.
  *
- * `origin` is the origin the current page was requested with. In the browser a
- * relative URL would be enough, but there is nothing for the server render to be
- * relative to, and SvelteKit's own event.fetch routes a same-origin /api request
- * through this app's router, which has no /api route. Addressing the dev server
- * by its own origin keeps a single code path: the request lands on Vite, whose
- * /api proxy forwards it to the Go API.
+ * Paths are relative. In the browser a relative /api/… URL resolves to the page
+ * origin. During server render the load() functions pass SvelteKit's own `fetch`
+ * (event.fetch), which routes a relative /api/… request through this app's
+ * router — where src/routes/api/[...path]/+server.js proxies it to the Go API.
+ * That keeps one code path and no component ever knows the Go host.
  *
  * @typedef {{ status: number, code: string, message: string }} ApiFailure
  */
@@ -20,12 +19,14 @@
  * the { status, code, message } shape the routes turn into error pages.
  * @param {string} method
  * @param {string} url
+ * @param {typeof fetch} [fetcher]  - event.fetch during SSR, else the global fetch
  * @returns {Promise<any>}
  */
-async function request(method, url) {
+async function request(method, url, fetcher) {
+	const f = fetcher ?? globalThis.fetch;
 	let res;
 	try {
-		res = await fetch(url, { method, headers: { Accept: 'application/json' } });
+		res = await f(url, { method, headers: { Accept: 'application/json' } });
 	} catch {
 		// The Go server is not running, or the proxy target refused the
 		// connection. The page still has to render something honest.
@@ -58,11 +59,11 @@ async function request(method, url) {
 /**
  * GET one JSON endpoint.
  * @param {string} path
- * @param {{ origin?: string }} [options]
+ * @param {{ fetch?: typeof fetch }} [options]
  * @returns {Promise<any>}
  */
-async function getJSON(path, { origin = '' } = {}) {
-	return request('GET', `${origin}${path}`);
+async function getJSON(path, { fetch: fetcher } = {}) {
+	return request('GET', path, fetcher);
 }
 
 /**

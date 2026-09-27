@@ -1,22 +1,25 @@
 # jobs-web
 
-Read-only SvelteKit dashboard over the Go API. Three screens:
+SvelteKit dashboard over the Go API. Five screens:
 
 - **Runs** at `/` — the status and history of every `scrape_runs` row: running runs first, then
   finished ones, with a count of active runs. It is the only screen that polls (every 5s), because a
-  run is in flight and its status is the thing changing.
+  run is in flight and its status is the thing changing. Each run links to its detail/trace page.
+- **Run detail** at `/runs/[id]` — one run's status and counters plus its live agent trace (the
+  `step`/`done` events the browser-use worker writes). Polls every 3s while a run is in flight.
 - **Companies** at `/companies` and `/companies/[id]` — a directory of companies and, per company,
   the careers-site resolution trail behind it. The directory shows each company's `career_site_url`
   (linked), its validation verdict (`confirmed`/`wrong`/`unverifiable`), and its attempt count, with
   filters for `resolution`, `index`, and `search`. The detail page shows the company's facts and every
-  `url_resolution_attempts` row — accepted and rejected alike.
+  `url_resolution_attempts` row — accepted and rejected alike — plus the **Scrape** button that
+  triggers one company's listings scrape.
 - **Jobs** at `/jobs` and `/jobs/[id]` — the scraped job listings, with a per-job page showing the
   description (rendered as escaped plain text, never as HTML) and the listing/application/discovery
   URLs.
 
-There is no write path, no auth, and no client-side fetching on first load: every page is
-server-rendered, and only then does the browser fetch more (the runs poll, and the companies/jobs
-"load more" buttons that request the next offset).
+The only write path is the Scrape button (`POST /api/companies/{id}/scrape`); there is no auth. No
+client-side fetching on first load: every page is server-rendered, and only then does the browser
+fetch more (the runs and run-detail polls, and the companies/jobs "load more" buttons).
 
 ## Prerequisites
 
@@ -40,8 +43,10 @@ npm run dev
 
 Then open http://localhost:5173/.
 
-`npm run build` and `npm run preview` exist but are not used yet: this is a dev-only setup and no
-deployment adapter target is configured.
+`npm run build` builds a standalone Node server with `@sveltejs/adapter-node`
+(`web/build/index.js`) — this is what the `ui` Docker service runs. `npm run preview` serves that
+build locally.
+
 
 ## How it talks to the API
 

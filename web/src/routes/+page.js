@@ -5,12 +5,12 @@ import { getRuns } from '$lib/api.js';
 // contains the runs. The page then re-runs it on an interval via invalidate to
 // pick up live status.
 /** @type {import('./$types').PageLoad} */
-export async function load({ url, depends }) {
+export async function load({ fetch, depends }) {
 	depends('data:runs');
 
 	let data;
 	try {
-		data = await getRuns({ limit: 100, offset: 0 }, { origin: url.origin });
+		data = await getRuns({ limit: 100, offset: 0 }, { fetch });
 	} catch (failure) {
 		// The API's own message when it sent an error envelope; a readable
 		// fallback when the failure never reached the API at all.
