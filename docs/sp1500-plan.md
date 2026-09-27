@@ -4,11 +4,11 @@
 
 | Field | Value |
 | --- | --- |
-| Current milestone | **M1 and M2a complete; the full 1,498-company run is done** (see §12) |
-| Next action | Fix the tier-1 Wikipedia-join failure that loses ~310 companies their homepage (§12) |
+| Current milestone | **M1, M2a and M3 complete; the browser validation sweep has run** - 496 confirmed / 62 wrong / 76 unverifiable of 634 stored URLs (see §12 and `docs/runs/2026-09-27-browser-validation.md`). The tier-1 re-keying fixes are in and measured: stored careers URLs **632 → 834** (`docs/runs/2026-09-27-residue-after-join-fix.md`). |
+| Next action | **None for the career-site search - it stops here by decision (§12).** When work resumes, the next feature tier is **M2b (HTML-only ATS tenant extraction)**, which has a plausible claim on the 379 companies that have a homepage but no careers signal. |
 | Blocking issues | none |
 | Open questions | 3, all non-blocking (see "Unresolved") |
-| Last corrected | resolution figure: **529 confirmed careers pages (35.3%)**, not the 42.2% stored-value share (§9) |
+| Last corrected | validation figure: the first browser sweep's 555 confirmed included **14 pages the census had named wrong**; the validation profile moved them to wrong/unverifiable (§9, failure mode 7) |
 
 This document is the single source of truth for the S&P 1500 workstream. It is self-contained:
 it embeds the measurements, the decisions, and the traps, so a new session can continue without
@@ -87,7 +87,7 @@ Implementation notes that differ from, or add to, the plan above:
 
 The no-article row count is **252** (1 / 43 / 208), not the 253 recorded earlier.
 | **M2b** | `5b` HTML-only ATS tenant extraction (Oracle Cloud, Eightfold, Workday, Phenom, SuccessFactors, Taleo) | planned |
-| **M3** | browser-use behind `ENABLE_BROWSER_USE`, Go→Python subprocess, shared validation gate | deferred |
+| **M3** | browser-use behind `ENABLE_BROWSER_USE`, Go→Python subprocess, shared validation gate | **complete** — `sp1500 validate`, see §7.5 and the M3 progress table below |
 
 HTML extraction (M2b) matters more than the ATS API layer (M2a), because the most common
 enterprise ATSs are HTML-only.
@@ -157,6 +157,56 @@ Implementation notes:
   value to have a provocation, and `TestNoVerdictProducesAnUndeclaredReason` closes the other end, so
   the vocabulary cannot decay into aspirations or drift into free text. Renaming a value is a data
   migration, not a refactor.
+
+### M3 progress
+
+M3 is implemented as `sp1500 validate`, a real subcommand rather than a script. It answers a
+different question from the ladder: not "what is this company's careers URL?" but "is the URL we
+stored still that?". It therefore never writes `career_site_url`.
+
+| Piece | Status |
+| --- | --- |
+| Worker contract (`docs/browser-use-worker.md`) | done |
+| Python worker (`worker/browser_worker.py`), render + agent modes | done |
+| Go seam (`internal/browseruse`): subprocess worker, protocol errors, timeouts | done |
+| Validation job (`internal/runvalidate`): render → gate → classify → persist | done |
+| Migration `009` (`career_validation` platform) and `010` (verdict columns, run counters) | done |
+| Command wiring (`cmd/sp1500/validate.go`), `ENABLE_BROWSER_USE` gate | done |
+| Resumability: already-validated companies are skipped by default | done |
+| Escalation on the residue (`--escalate` → browser-use agent → re-render → gate) | done |
+
+**Measured outcome** (2026-09-27, all 634 stored URLs in `data/sp1500-live/jobs.db`; run report
+`docs/runs/2026-09-27-browser-validation.md`): **496 confirmed, 62 wrong, 76 unverifiable**. A default
+re-run skips all 634. Four defects were found and fixed during the first pass, the largest being that
+the discovery gate is not a validation gate - see failure mode 7 and the corrections ledger.
+
+The escalated residue was sampled, not swept: one hard-403 site (`bank-ozk`) cost ~6 minutes and did
+not change its verdict, so the agent stays a bounded tool. The blocked share is 64 of 634 (10.1%),
+matching §8.1's measurement on the resolution side.
+
+Design notes worth keeping:
+
+- **The browser tier has no acceptance rules of its own.** A render becomes a `careers.Response` and
+  goes through `careers.Validate`, the same gate every deterministic tier uses. A page that refused,
+  timed out or never loaded becomes a transport error - an unknown - so a blocked host is never
+  recorded as a wrong URL.
+- **The agent returns a URL, never a page.** `render` mode fetches HTML; `agent` mode returns the URL
+  the LLM navigation loop ended on, and that URL is re-rendered and gated. Letting the agent's own
+  page content into the decision would put an LLM inside the judgement the gate exists to make.
+- **`wrong` and `unverifiable` are different facts.** "A page loaded and it is demonstrably not a
+  careers page" is `wrong`; a 403, a bot wall, a timeout or an empty body proves nothing and is
+  `unverifiable`. Folding them together turns a measurement into false accusations.
+- **Skipping validated companies is the default**, not an opt-in flag. A sweep answers a question a
+  company either has an answer to or does not, so a re-run after an interruption resumes; `--refresh`
+  is the override and `--stale-after` is the age-window variant.
+- **The process timeout needs `cmd.WaitDelay`.** `exec.CommandContext` kills the process it started,
+  but a shell's or Python's children inherit the stdout pipe, so `Wait` blocks until the grandchild
+  exits: a 150ms budget was measured taking 5s against a `sleep 5` stand-in.
+- **The concurrency semaphore is acquired inside the worker goroutine.** Acquiring it in the spawn
+  loop couples spawning to consuming, and once `concurrency` workers block on a full results buffer
+  the loop deadlocks with companies still to spawn. A live three-company run at concurrency 1 hung on
+  it while an eight-company test at concurrency 4 passed by arithmetic luck; the regression test is
+  sized past that boundary on purpose.
 
 ### SmartRecruiters: excluded, probed 2026-09-26
 
@@ -815,13 +865,21 @@ runtime-discovered vendors, so the M2 migration is where that mapping belongs, n
 
 ### 7.5 M3 — browser-use containment
 
-- Go orchestrator shells out to a Python browser-use worker.
-- Worker reads JSON args, writes **one JSON object to stdout**, logs to stderr.
+**Implemented.** The spec below is what was built; the pieces and the design notes are in the M3
+progress table in §3, and the contract is `docs/browser-use-worker.md`.
+
+- Go orchestrator shells out to a Python browser-use worker. ✔
+- Worker reads JSON args, writes **one JSON object to stdout**, logs to stderr. ✔ (stdout is
+  redirected to stderr for the whole worker run, so a library banner cannot corrupt the protocol; a
+  second JSON object on stdout is a protocol error, not a value to ignore.)
 - Go enforces timeout, concurrency 1, and validates the returned URL through the **same content
-  gate** before any DB write.
-- Feature flag `ENABLE_BROWSER_USE=1`.
+  gate** before any DB write. ✔ (concurrency is configurable and defaults to 1; `cmd.WaitDelay`
+  bounds the process teardown so a killed worker's children cannot hold the run open.)
+- Feature flag `ENABLE_BROWSER_USE=1`. ✔ (parsed, not merely tested for emptiness, so
+  `ENABLE_BROWSER_USE=0` means off rather than "any non-empty value is true".)
 - **Fake-worker tests:** success, malformed JSON, timeout, nonzero exit, fabricated URL that fails
-  validation.
+  validation. ✔ all five, plus stdout purity, unknown `error_kind`, and an accepted-render-with-no-URL
+  case.
 
 ---
 
@@ -884,6 +942,7 @@ adversarial re-testing, and several were stated confidently before being overtur
 | The model may not do structured actions at all | It emits a valid nested-argument tool call | `POST /api/chat` with a tools schema |
 | "632 resolved" in the full run means 632 working careers URLs | 632 is the **stored** count. A 2026-09-27 census of all 632 stored URLs found 529 (35.3%) reachable careers pages, 54 (3.6%) provably wrong pages, and 49 (3.3%) unverifiable (blocked/dead to a plain client). The 42.2% headline was the stored share, not a working share. | Fetching every stored URL and classifying by content; `docs/runs/2026-09-26-full.md` |
 | The 562 no-homepage companies are blocked or lack an article | **Most were neither.** 180 have a redirect/normalisation between the S&P name and the article, and 103 more have a wikilink target that resolves although the *name* finds no article. Both were re-keying bugs (family 7), not blocks - so the §8.1 browser-use call was resting on a number that was mostly a code defect. | Re-parsing the stored raw wikitext against the live API; `1ca9b6a`, `ea8ab73` |
+| "Validate the returned URL through the same content gate" (§7.5) is sufficient for a validation pass | **Necessary but not sufficient.** The gate's evidence rules are generous *by design*, and that generosity is only safe while the URL was proposed by a tier that had already looked for a careers page. A validation pass judges an arbitrary stored URL, where the same rule accepts a page that merely contains a matching substring. The first browser sweep "confirmed" 14 of the 54 pages the hand census had named wrong: PriceSmart's `JobStar` brush-cutter product page (`job` inside "JobStar"), a Morningstar "Human Verification" wall answering 202, an Uber route page at `.../routes/joinville-le-pont-...` (`join` inside "Joinville"), Dynatrace's `/hub/detail/control-m-jobs-v2/` product page, and EEO/fraud-alert/supplier pages. | Spot-checking the sweep's acceptances against the census's named wrong picks before publishing the number; `RequireJobListingEvidence` + `docs/runs/2026-09-27-browser-validation.md` |
 
 ### Recurring failure modes
 
@@ -907,8 +966,7 @@ The shape is `if input present, assert property`. It defeats itself the first ti
 missing, and missing input is the *normal* case for a scraper: an unnamed company, a page with no
 title, a link with no href.
 
-**The rule:** the absent-input case is its own explicit rejection, never a no-op. `containsCompanyToken`
-stays permissive so callers can use it as a substring test, and the *callers* that need
+**The rule:** the absent-input case is its own explicit rejection, never a no-op. `containsCompanyToken`stays permissive so callers can use it as a substring test, and the *callers* that need
 corroboration reject separately (`unverifiable_ats_title`). The audit is to grep the gate and the
 parser for predicates of that shape and confirm each has an `else → reject` arm.
 
@@ -988,6 +1046,22 @@ this diagnosable in minutes rather than another run.
 **The audit:** for every map keyed by a value derived from an external response, find where that key
 was constructed and whether the response can change it. `homepages[c.Article]` is the shape to grep
 for.
+
+**7. Reusing a rule outside the conditions it was tuned for.** The validation gate's evidence test is
+generous because the discovery tiers only ever hand it a URL that already looked like a careers page.
+A validation pass hands it *any* stored URL, and the same test then reads a substring as proof: `job`
+inside "JobStar" (a brush cutter), `join` inside "Joinville" (a bus route), `jobs` inside
+"control-m-jobs-v2" (a product), `opportunities` inside "Supplier Opportunities", `employment` inside
+"Employment Fraud Alert". The rule was correct and its inputs had changed underneath it.
+
+The rule: **a rule shared between two callers needs its preconditions checked for each caller, not
+just its code.** The question to ask before reusing a validator is not "does it implement the property
+I want" but "was it written for inputs that already have the property". For the validation profile
+that meant requiring positive listing evidence and rejecting pages that name themselves as another
+kind of page, while leaving the discovery path's behaviour untouched (`RequireJobListingEvidence`).
+
+The audit: grep for exported predicates that take a candidate plus a response and confirm, for each
+caller, that the caller's inputs satisfy what the predicate assumes rather than what it tests.
 
 ---
 
@@ -1088,19 +1162,58 @@ one.
    0 now resolves 18. **The information was in the wikitext the whole time; both bugs were in the
    re-keying, and both are the fake-input-shape family (§9): `wikipediaBody` never emitted
    `normalized`/`redirects`, and no fixture ever asserted that `Article` survived the write path.**
-2. **Backfill and re-run, then re-measure.** The re-run of `sp1500` has backfilled `article_title`
-   on the live DB (1,246 rows populated, 271 differing from the name). The released gain has **not**
-   yet been measured across the whole residue - only a 60-company dry run (`run_id=10`, 18/60).
-   Re-run resolution over the residue and update `docs/runs/` before any M2b/M3 decision: repairing
-   tier 1 moves the blocked share that §8.1's browser-use call rests on.
-3. **SearXNG Phase A is unblocked but not implemented.** `SEARXNG_URL` is configured
-   (`ca1b1e6`) and `format=json` works through the reverse proxy at
-   `https://search.siggy-lab.org`; a real query returns the right careers page plus aggregators
-   (ZipRecruiter) that must be rejected. The client, the `Source='searxng'` value and the M/N
-   decision rule are **not** written yet. Do not start this while item 2 is unmeasured: it adds a
-   dependency to answer a question the join fix may already have answered.
-4. M2b (HTML-only ATS tenant extraction) remains the next feature tier; M3 (browser-use) stays
-   deferred by the §8.1 call in the run report.
+2. ~~**Backfill and re-run, then re-measure.**~~ **DONE 2026-09-27** (`run_id=11`; report:
+   `docs/runs/2026-09-27-residue-after-join-fix.md`). `article_title` was backfilled by re-running
+   `sp1500` (1,246 rows populated, 271 differing from the name), then resolution re-ran over the
+   whole 866-company residue: **202 newly resolved, 0 failed, 59 minutes, stderr empty**.
+
+   | | before | after |
+   | --- | --- | --- |
+   | Stored careers URLs | 632 | **834** |
+   | Companies with no homepage | 562 | **285** (−49%) |
+
+   **183 of the 202 new career sites come from exactly the companies the two bugs were diagnosed on**
+   (102 of the 180 aliased names, 81 of the 106 unresolvable names), against the 103-of-106
+   prediction that motivated the second fix - so the gain is attributable, not coincidental.
+
+   **834 is a count of *stored* values, not of working careers pages.** The 202 added here have not
+   been fetched and classified, so no working-share figure is claimed for them. The next honest step
+   on them is a validation sweep, not another resolution pass.
+3. **SearXNG Phase A is parked by decision, not by oversight.** `SEARXNG_URL` is configured
+   (`ca1b1e6`) and `format=json` works through the reverse proxy at `https://search.siggy-lab.org`
+   (a real query returns the right careers page plus aggregators such as ZipRecruiter that the
+   reject-list must exclude). The client, the `Source='searxng'` value and the M/N decision rule are
+   **not** written and should not be started: the join fix recovered 202 companies, and the residue
+   is now dominated by **242 rows with no Wikipedia article at all** - a set a search engine cannot
+   help with either, because there is nothing to search *for*. Revisit only if the 379
+   homepage-without-a-careers-page set turns out to be worth attacking.
+4. **M3 (browser-use) is no longer deferred**: it is implemented as `sp1500 validate` and has run
+   over the stored URLs - **496 confirmed / 62 wrong / 76 unverifiable of 634**, recorded in
+   `docs/runs/2026-09-27-browser-validation.md`. The §8.1 call that deferred it was about
+   *resolution* (the blocked residue was only ~10%), and that reasoning still stands; validation is a
+   different question, where a real browser is the only way to re-measure values a plain client could
+   not settle.
+
+   Two things the first pass established that a later run should not re-learn: the discovery gate is
+   not a validation gate (failure mode 7), and the browser-use agent costs ~6 minutes per site and
+   does not beat a hard bot wall - so escalation is a sample, not a pass.
+
+   Its verdicts on the pre-existing URLs remain valid, because `run_id=11` only *adds* rows and
+   rewrites none of them. What it cannot speak to is the 202 companies recovered there, so any
+   browser-use conclusion that rests on the *size of the residue* needs revisiting once those are
+   classified.
+5. **Next feature tier: M2b (HTML-only ATS tenant extraction)** - Oracle Cloud, Eightfold, Workday,
+   Phenom, SuccessFactors, Taleo. Unchanged and unstarted. This is the remaining work with a
+   plausible claim on the 379 companies that have a homepage but no careers signal.
+
+The career-site search stops here deliberately, and is good enough to build on: **834 companies carry
+a stored careers URL and 496 of them are browser-confirmed.**
+
+**Where the next workstream starts:** `docs/scraping-plan.md`. It carries the input query for those
+URLs, what to reuse from the existing scraper, the vendor map mined from the validation pass's retained
+pages, and the first slice. Its most important measurement: **zero** confirmed `career_site_url` values
+are ATS-hosted - the ladder stored branded first-party pages - so the boards sit behind those pages, and
+264 of the vendor references found there are HTML-only (Workday 141).
 
 **Known defect, not yet fixed:** `upsertIndexCompany` reports "inserted" whenever `RETURNING` yields
 a row, but the `ON CONFLICT DO UPDATE` branch yields a row on every real update too. Re-running the
