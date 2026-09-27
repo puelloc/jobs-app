@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 # the caller can tighten with --link-pattern once a vendor's shape is known.
 JOB_PATH_TOKENS = (
     "/job/", "/jobs/", "/posting/", "/postings/", "/opening/", "/openings/",
-    "/position/", "/positions/", "/role/", "/vacancy/", "/detail/", "/apply",
+    "/position/", "/positions/", "/role/", "/vacancy/", "/detail/",
     "gh_jid", "job_id", "jobId",
 )
 
@@ -59,6 +59,103 @@ def _strip_tags(html: str) -> str:
     text = re.sub(r"&nbsp;", " ", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+_COUNTRY_CODES = {
+    "united states": "US", "usa": "US", "united states of america": "US",
+    "canada": "CA", "united kingdom": "GB", "uk": "GB", "india": "IN",
+    "germany": "DE", "france": "FR", "spain": "ES", "mexico": "MX",
+    "brazil": "BR", "australia": "AU", "singapore": "SG", "japan": "JP",
+    "netherlands": "NL", "ireland": "IE", "poland": "PL", "portugal": "PT",
+    "switzerland": "CH", "italy": "IT", "sweden": "SE", "denmark": "DK",
+    "finland": "FI", "norway": "NO", "belgium": "BE", "austria": "AT",
+}
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _country_code(value: str) -> str:
+    """Map a country name or ISO code to its two-letter code, or "" when unrecognised."""
+    v = value.strip()
+    upper = v.upper()
+    if len(upper) == 2 and upper.isalpha():
+        return upper
+    return _COUNTRY_CODES.get(v.lower(), "")
+
+
+def _country_name_or_code(value) -> str:
+    """Normalise a country field that may be a string code, a name, or a {"name": ...} dict."""
+    if isinstance(value, dict):
+        value = value.get("name") or ""
+    return str(value or "").strip()
+
+
+def _classify_location(posting: dict) -> dict:
+    """Derive country / is_us / location_text from a JobPosting ld+json.
+
+    The deterministic fix for the location leak: the browser-use agent applies only a coarse filter,
+    and this reads the structured country out of the embedded JSON so the caller can keep exactly the
+    US postings. The "remote" half is the caller's concern - the flow only extracts from a
+    remote-filtered listings URL, so it does not try to guess remote from the posting.
+    """
+    countries: list[str] = []
+    parts: list[str] = []
+
+    # Greenhouse uses applicantLocationRequirements: a list of Country objects.
+    for req in _as_list(posting.get("applicantLocationRequirements")):
+        if not isinstance(req, dict):
+            continue
+        name = _country_name_or_code(req.get("name"))
+        if name:
+            parts.append(name)
+            if code := _country_code(name):
+                countries.append(code)
+
+    # schema.org jobLocation: one or more Place objects carrying an address.
+    for loc in _as_list(posting.get("jobLocation")):
+        if not isinstance(loc, dict):
+            continue
+        addr = loc.get("address") or {}
+        if not isinstance(addr, dict):
+            continue
+        country = _country_name_or_code(addr.get("addressCountry"))
+        region = _country_name_or_code(addr.get("addressRegion"))
+        locality = _country_name_or_code(addr.get("addressLocality"))
+        if country:
+            parts.append(country)
+            if code := _country_code(country):
+                countries.append(code)
+        if region:
+            parts.append(region)
+        if locality:
+            parts.append(locality)
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for p in parts:
+        if p and p not in seen:
+            seen.add(p)
+            ordered.append(p)
+
+    us = "US" in countries
+    if us:
+        country = "US"
+    elif len(countries) == 1:
+        country = countries[0]
+    else:
+        country = ""
+
+    return {
+        "country": country or None,
+        "is_us": us if countries else None,
+        "location_text": ", ".join(ordered) or None,
+    }
 
 
 def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
@@ -134,6 +231,7 @@ def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
                         rec["description"] = _truncate(_strip_tags(desc), max_body_bytes)
                         if posting.get("title"):
                             rec["title"] = posting["title"]
+                        rec.update(_classify_location(posting))
                     else:
                         body = page.evaluate("() => document.body.innerText")
                         rec["description"] = _truncate(body, max_body_bytes)

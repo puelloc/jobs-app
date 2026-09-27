@@ -21,11 +21,14 @@ import (
 )
 
 type jobRecord struct {
-	URL         string `json:"url"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	RawData     string `json:"raw_data"`
-	Error       string `json:"error"`
+	URL          string  `json:"url"`
+	Title        string  `json:"title"`
+	Description  string  `json:"description"`
+	RawData      string  `json:"raw_data"`
+	Error        string  `json:"error"`
+	Country      *string `json:"country"`
+	LocationText *string `json:"location_text"`
+	IsUS         *bool   `json:"is_us"`
 }
 
 type listingsOutput struct {
@@ -35,6 +38,13 @@ type listingsOutput struct {
 
 type playbook struct {
 	ExternalIDPattern string `json:"external_id_pattern"`
+}
+
+func strOrEmpty(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 func main() { os.Exit(run()) }
@@ -102,18 +112,29 @@ func run() int {
 		return 1
 	}
 
-	inserted, refreshed := 0, 0
+	inserted, refreshed, skipped := 0, 0, 0
 	for _, j := range out.Jobs {
 		if j.URL == "" || j.Error != "" {
 			continue
 		}
+		// US-only: keep a posting only when the extracted ld+json positively identifies it as
+		// United States. "Unknown" is not US, so it is skipped too. The "remote" half is the
+		// flow's own guarantee - this command only ever scrapes a remote-filtered listings URL.
+		if j.IsUS == nil || !*j.IsUS {
+			fmt.Fprintf(os.Stderr, "skip non-US %s\n", j.URL)
+			skipped++
+			continue
+		}
 		job := store.BrowserJob{
-			ExternalID:  store.ExternalID(extPattern, j.URL),
-			ListingURL:  j.URL,
-			Title:       j.Title,
-			Description: j.Description,
-			RawData:     j.RawData,
-			IsRemote:    true, // this flow only extracts postings already filtered to remote
+			ExternalID:   store.ExternalID(extPattern, j.URL),
+			ListingURL:   j.URL,
+			Title:        j.Title,
+			Description:  j.Description,
+			RawData:      j.RawData,
+			LocationText: strOrEmpty(j.LocationText),
+			Country:      strOrEmpty(j.Country),
+			IsUS:         j.IsUS,
+			IsRemote:     true,
 		}
 		if !*commit {
 			fmt.Printf("DRY-RUN company=%d platform=%d ext_id=%s title=%q\n",
@@ -133,9 +154,9 @@ func run() int {
 	}
 
 	if *commit {
-		fmt.Printf("wrote %d inserted, %d refreshed\n", inserted, refreshed)
+		fmt.Printf("wrote %d inserted, %d refreshed, %d skipped\n", inserted, refreshed, skipped)
 	} else {
-		fmt.Printf("dry run: %d jobs, nothing written (pass -commit to write)\n", len(out.Jobs))
+		fmt.Printf("dry run: %d jobs, %d skipped, nothing written (pass -commit to write)\n", len(out.Jobs), skipped)
 	}
 	return 0
 }

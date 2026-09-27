@@ -25,8 +25,13 @@ type BrowserJob struct {
 	LocationText   string
 	EmploymentType string
 	IsRemote       bool
-	PostedAt       *time.Time
-	RawData        string
+	// Country is the ISO-3166 alpha-2 code parsed from the posting's ld+json; empty means unknown.
+	Country string
+	// IsUS reports whether the posting's location is the United States. Nil means the location was
+	// not present in the ld+json, so the posting cannot be confirmed US.
+	IsUS     *bool
+	PostedAt *time.Time
+	RawData  string
 }
 
 // UpsertBrowserJob writes one browser-sourced posting and reports whether it was newly inserted.
@@ -48,6 +53,14 @@ func UpsertBrowserJob(ctx context.Context, q Querier, j BrowserJob, companyID, d
 	if j.IsRemote {
 		isRemote = 1
 	}
+	var isUS any
+	if j.IsUS != nil {
+		if *j.IsUS {
+			isUS = int64(1)
+		} else {
+			isUS = int64(0)
+		}
+	}
 	var postedAt any
 	if j.PostedAt != nil {
 		postedAt = j.PostedAt.UTC().Format(time.RFC3339)
@@ -65,8 +78,8 @@ func UpsertBrowserJob(ctx context.Context, q Querier, j BrowserJob, companyID, d
 		nullable(j.EmploymentType),
 		isRemote,
 		nullable(j.LocationText),
-		nil, // country
-		nil, // is_us
+		nullable(j.Country),
+		isUS,
 		nullable(j.Description),
 		nil, nil, nil, nil, // salary_min/max/currency/period
 		nil, // tags_json
