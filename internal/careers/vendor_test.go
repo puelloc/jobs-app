@@ -34,6 +34,8 @@ func TestFingerprint_ByHTML(t *testing.T) {
 		{`<input data-testid="position-query-search-search">`, "eightfold"},
 		{`<button data-ph-at-id="globalsearch-button">Search</button>`, "phenom"},
 		{`<div>Powered by SuccessFactors</div>`, "successfactors"},
+		{`<a href="https://boards.greenhouse.io/acme">Careers</a>`, "greenhouse"},
+		{`<a href="https://acme.wd1.myworkdayjobs.com/acme">Jobs</a>`, "workday"},
 		{`<div>nothing to see here</div>`, ""},
 	}
 	for _, c := range cases {

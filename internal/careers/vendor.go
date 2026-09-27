@@ -2,12 +2,13 @@
 //
 // The JSON-API vendors (Greenhouse, Lever, Ashby) are already classified by ParseTenant; this
 // extends classification to the HTML-only vendors (Workday, iCIMS, SuccessFactors, Phenom,
-// Eightfold, Taleo, Oracle Cloud) whose boards sit on the company's own domain and can only be told
-// apart by host or DOM signature.
+// Eightfold, Taleo, Oracle Cloud), whose boards sit either on their own domains or on the company's
+// first-party domain.
 //
-// The return value is the vendor's platforms.name, so a caller resolves it to a platforms id with
-// store.PlatformIDByName and no further mapping. "" means "no known vendor", the case a caller
-// routes to the generic browser agent.
+// Classification uses two signals: the page's final URL (a redirect to the board) and the page HTML
+// (a board link, or a vendor-specific DOM signature). The return value is the vendor's
+// platforms.name, so a caller resolves it to a platforms id with store.PlatformIDByName and no
+// further mapping. "" means "no known vendor", the case a caller routes to the generic browser agent.
 package careers
 
 import (
@@ -16,8 +17,8 @@ import (
 )
 
 // Fingerprint identifies the vendor behind a rendered careers page from its final URL (after
-// redirects) and its HTML body. Hosts are checked before the DOM because a redirect target is the
-// most reliable signal; DOM signatures are the fallback for boards that stay on a first-party domain.
+// redirects) and its HTML body. The host is checked before the DOM because a redirect target is the
+// most reliable signal; DOM signatures and board links are the fallback.
 func Fingerprint(finalURL, html string) string {
 	if v := vendorFromURL(finalURL); v != "" {
 		return v
@@ -25,8 +26,6 @@ func Fingerprint(finalURL, html string) string {
 	return vendorFromHTML(html)
 }
 
-// vendorFromURL classifies by host: first the JSON-API vendors via ParseTenant, then the HTML-only
-// board hosts.
 func vendorFromURL(raw string) string {
 	if _, ats, err := ParseTenant(raw); err == nil {
 		return string(ats)
@@ -36,20 +35,26 @@ func vendorFromURL(raw string) string {
 		return ""
 	}
 	host := strings.ToLower(u.Hostname())
-	for _, e := range htmlVendorHosts {
-		if host == e.suffix || strings.HasSuffix(host, "."+e.suffix) {
+	for _, e := range vendorHosts {
+		if host == e.host || strings.HasSuffix(host, "."+e.host) {
 			return e.vendor
 		}
 	}
 	return ""
 }
 
-// htmlVendorHosts maps HTML-only board hosts (suffix-matched, because vendors use per-tenant
-// subdomains like acme.wd1.myworkdayjobs.com) to the vendor name.
-var htmlVendorHosts = []struct {
-	suffix string
+// vendorHosts maps a vendor's board host to its name. It is consulted two ways: suffix-matched
+// against the final page hostname (a redirect to the board), and substring-matched against the page
+// HTML (a first-party page linking to its board - the norm among the confirmed career_site_url
+// values, none of which are ATS-hosted).
+var vendorHosts = []struct {
+	host   string
 	vendor string
 }{
+	{"boards.greenhouse.io", "greenhouse"},
+	{"job-boards.greenhouse.io", "greenhouse"},
+	{"jobs.lever.co", "lever"},
+	{"jobs.ashbyhq.com", "ashby"},
 	{"myworkdayjobs.com", "workday"},
 	{"icims.com", "icims"},
 	{"taleo.net", "taleo"},
@@ -58,9 +63,9 @@ var htmlVendorHosts = []struct {
 	{"sapsf.com", "successfactors"},
 }
 
-// vendorFromHTML classifies by DOM signature. The eightfold and phenom entries are verified against
-// real boards (worker/vendor-playbooks); the rest are best-effort and should be promoted to verified
-// once a real board confirms them.
+// vendorFromHTML classifies by DOM signature and board link. The eightfold and phenom signatures are
+// verified against real boards (worker/vendor-playbooks); board-host references are checked before
+// the one best-effort marker so a footer mention never outranks a real board link.
 func vendorFromHTML(html string) string {
 	lower := strings.ToLower(html)
 	switch {
@@ -69,15 +74,13 @@ func vendorFromHTML(html string) string {
 	case strings.Contains(html, "data-ph-at-id="):
 		return "phenom"
 	}
-	switch {
-	case strings.Contains(lower, "myworkdayjobs"):
-		return "workday"
-	case strings.Contains(lower, "careersitecompanyid") || strings.Contains(lower, "successfactors"):
+	for _, e := range vendorHosts {
+		if strings.Contains(lower, e.host) {
+			return e.vendor
+		}
+	}
+	if strings.Contains(lower, "careersitecompanyid") || strings.Contains(lower, "successfactors") {
 		return "successfactors"
-	case strings.Contains(lower, "icims"):
-		return "icims"
-	case strings.Contains(lower, "taleo"):
-		return "taleo"
 	}
 	return ""
 }
