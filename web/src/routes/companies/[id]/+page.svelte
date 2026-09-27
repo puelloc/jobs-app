@@ -8,21 +8,29 @@
 	 */
 	let { data } = $props();
 
-	const { company, attempts } = data;
+	// Derived rather than destructured once: navigating from one company to
+	// another is a client-side navigation on this same route, so the component
+	// is retained and `data` replaced. Reading it into plain consts would keep
+	// showing the previous company's trail under the new company's heading.
+	const company = $derived(data.company);
+	const attempts = $derived(data.attempts);
 
 	// Grouped by run, newest first, so the history reads as passes rather than
 	// as one undifferentiated list.
-	const byRun = [];
-	for (const attempt of attempts) {
-		const key = attempt.run_id ?? 0;
-		let bucket = byRun.find((b) => b.runId === key);
-		if (!bucket) {
-			bucket = { runId: key, attempts: [] };
-			byRun.push(bucket);
+	const byRun = $derived.by(() => {
+		const runs = [];
+		for (const attempt of data.attempts) {
+			const key = attempt.run_id ?? 0;
+			let bucket = runs.find((b) => b.runId === key);
+			if (!bucket) {
+				bucket = { runId: key, attempts: [] };
+				runs.push(bucket);
+			}
+			bucket.attempts.push(attempt);
 		}
-		bucket.attempts.push(attempt);
-	}
-	byRun.sort((a, b) => b.runId - a.runId);
+		runs.sort((a, b) => b.runId - a.runId);
+		return runs;
+	});
 </script>
 
 <svelte:head><title>{company.name}</title></svelte:head>

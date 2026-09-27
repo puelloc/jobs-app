@@ -38,9 +38,13 @@
 		return qs ? `/companies?${qs}` : '/companies';
 	}
 
-	const pageSize = data.limit;
-	const hasPrev = data.offset > 0;
-	const hasNext = data.offset + data.companies.length < data.total;
+	// Derived, not one-time initializers: the filter links are client-side
+	// navigations within this same route, so `data` is replaced while the
+	// component instance is retained. A plain `const` would freeze the paging
+	// state from the first visit (Svelte warns state_referenced_locally).
+	const pageSize = $derived(data.limit);
+	const hasPrev = $derived(data.offset > 0);
+	const hasNext = $derived(data.offset + data.companies.length < data.total);
 </script>
 
 <svelte:head><title>Companies</title></svelte:head>
