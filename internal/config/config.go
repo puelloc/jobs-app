@@ -27,6 +27,16 @@ const (
 
 	// DefaultHTTPTimeout is the whole-request deadline (design: Inputs table).
 	DefaultHTTPTimeout = 30 * time.Second
+
+	// DefaultBrowserUseCommand is the browser-use worker invocation, whitespace-split and run
+	// without a shell. It is a command rather than a python-path plus a script-path so a test can
+	// substitute a fake worker in one variable, which is the only way the command's own wiring is
+	// exercised without a browser.
+	DefaultBrowserUseCommand = ".venv-browser/bin/python worker/browser_worker.py"
+
+	// DefaultBrowserUseModel is the model the escalation tier asks Ollama for. The plan's M3
+	// section selects this tag: it has vision and tool-calling, and 64k of context.
+	DefaultBrowserUseModel = "qwen3.8-27b-64k:latest"
 )
 
 // Config holds the resolved runtime settings. No I/O happens in this package.
@@ -44,6 +54,19 @@ type Config struct {
 	// disabled: SearXNG is an optional dependency, not a required one. The value
 	// is stored with any trailing slash trimmed.
 	SearxngURL string
+
+	// BrowserUseEnabled gates the browser-use tier. It is off unless ENABLE_BROWSER_USE is set to a
+	// true value, so a browser-driven run is always a deliberate act: the tier starts a Python
+	// process and a Chromium, which nothing else in this tree does.
+	BrowserUseEnabled bool
+	// BrowserUseCommand is the worker invocation, whitespace-split, run without a shell.
+	BrowserUseCommand string
+	// BrowserUseModel is the Ollama model tag for the escalation tier.
+	BrowserUseModel string
+	// OllamaHost is the Ollama base URL the worker talks to. Empty means the worker's own default,
+	// which is why a run that needs escalation requires it to be set: a silently wrong default would
+	// make every escalation fail for a reason nothing in the run explains.
+	OllamaHost string
 }
 
 // SearxngEnabled reports whether a SearXNG instance is configured.
@@ -61,6 +84,21 @@ func Load() (Config, error) {
 		ServerAddr:  envOrDefault("SERVER_ADDR", DefaultServerAddr),
 		HTTPTimeout: DefaultHTTPTimeout,
 		SearxngURL:  strings.TrimSuffix(envOrDefault("SEARXNG_URL", ""), "/"),
+
+		BrowserUseCommand: envOrDefault("BROWSER_WORKER_COMMAND", DefaultBrowserUseCommand),
+		BrowserUseModel:   envOrDefault("BROWSER_USE_MODEL", DefaultBrowserUseModel),
+		OllamaHost:        strings.TrimSuffix(envOrDefault("OLLAMA_HOST", ""), "/"),
+	}
+
+	// ENABLE_BROWSER_USE is parsed rather than merely tested for emptiness: "ENABLE_BROWSER_USE=0"
+	// reads as "off" to a human, and treating any non-empty value as true would quietly do the
+	// opposite of what was written.
+	if raw := envOrDefault("ENABLE_BROWSER_USE", ""); raw != "" {
+		enabled, err := parseBool("ENABLE_BROWSER_USE", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.BrowserUseEnabled = enabled
 	}
 
 	// design: Run lifecycle step 1 - a bad value exits here with no DB trace.
@@ -110,7 +148,30 @@ func (c Config) validate() error {
 	if c.HTTPTimeout <= 0 {
 		return fmt.Errorf("HTTP_TIMEOUT must be greater than zero")
 	}
+	if c.BrowserUseCommand == "" {
+		return fmt.Errorf("BROWSER_WORKER_COMMAND must not be empty")
+	}
+	// OLLAMA_HOST is optional; only a value that is present must be well formed.
+	if c.OllamaHost != "" {
+		if err := validateHTTPURL("OLLAMA_HOST", c.OllamaHost); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// parseBool accepts the spellings an operator actually writes for a feature flag, and rejects
+// anything else rather than guessing. A typo like ENABLE_BROWSER_USE=yes-please must not be read as
+// either true or false silently.
+func parseBool(name, raw string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s %q is not a boolean; use 1/0, true/false, yes/no or on/off", name, raw)
+	}
 }
 
 // envOrDefault returns the environment value when set and non-empty, else def.

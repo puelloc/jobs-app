@@ -11,7 +11,8 @@ import (
 // change the outcome.
 func cleanEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"DB_PATH", "DATA_DIR", "REMOTEOK_ENDPOINT", "USER_AGENT", "HTTP_TIMEOUT", "LOG_LEVEL", "SEARXNG_URL"} {
+	for _, k := range []string{"DB_PATH", "DATA_DIR", "REMOTEOK_ENDPOINT", "USER_AGENT", "HTTP_TIMEOUT", "LOG_LEVEL", "SEARXNG_URL",
+		"ENABLE_BROWSER_USE", "BROWSER_WORKER_COMMAND", "BROWSER_USE_MODEL", "OLLAMA_HOST"} {
 		t.Setenv(k, "")
 	}
 }
@@ -274,5 +275,110 @@ func TestLoadTrimsTrailingSlashFromSearxngURL(t *testing.T) {
 	}
 	if cfg.SearxngURL != "https://search.siggy-lab.org" {
 		t.Errorf("SearxngURL = %q, want the trailing slash trimmed", cfg.SearxngURL)
+	}
+}
+
+// --- browser-use tier -----------------------------------------------------
+
+func TestBrowserUseIsOffUnlessEnabled(t *testing.T) {
+	cleanEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.BrowserUseEnabled {
+		t.Error("BrowserUseEnabled = true with the variable unset; the tier must be opt-in")
+	}
+	for _, tc := range []struct{ name, raw string }{
+		{"one", "1"}, {"true", "true"}, {"yes", "yes"}, {"on", "ON"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cleanEnv(t)
+			t.Setenv("ENABLE_BROWSER_USE", tc.raw)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !cfg.BrowserUseEnabled {
+				t.Errorf("ENABLE_BROWSER_USE=%q did not enable the tier", tc.raw)
+			}
+		})
+	}
+}
+
+// "ENABLE_BROWSER_USE=0" reads as off to a human. Treating any non-empty value as true would do the
+// opposite of what was written, which is the worst possible reading of a switch.
+func TestBrowserUseExplicitZeroMeansOff(t *testing.T) {
+	cleanEnv(t)
+	for _, raw := range []string{"0", "false", "no", "off"} {
+		t.Setenv("ENABLE_BROWSER_USE", raw)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.BrowserUseEnabled {
+			t.Errorf("ENABLE_BROWSER_USE=%q enabled the tier", raw)
+		}
+	}
+}
+
+func TestBrowserUseRejectsASpellingItDoesNotUnderstand(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("ENABLE_BROWSER_USE", "yes-please")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("an unrecognised boolean was accepted")
+	}
+	if !strings.Contains(err.Error(), "ENABLE_BROWSER_USE") {
+		t.Errorf("error = %q, want it to name the variable", err)
+	}
+}
+
+func TestBrowserUseDefaultsAreUsableWithoutConfiguration(t *testing.T) {
+	cleanEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.BrowserUseCommand != DefaultBrowserUseCommand {
+		t.Errorf("BrowserUseCommand = %q, want %q", cfg.BrowserUseCommand, DefaultBrowserUseCommand)
+	}
+	if cfg.BrowserUseModel != DefaultBrowserUseModel {
+		t.Errorf("BrowserUseModel = %q, want %q", cfg.BrowserUseModel, DefaultBrowserUseModel)
+	}
+	// OLLAMA_HOST has no default on purpose: the plan records two possible hosts (the NAS itself and
+	// the LAN address), and guessing between them would make every escalation fail for a reason the
+	// run cannot explain.
+	if cfg.OllamaHost != "" {
+		t.Errorf("OllamaHost = %q, want empty", cfg.OllamaHost)
+	}
+}
+
+func TestBrowserUseRejectsAMalformedOllamaHost(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("OLLAMA_HOST", "ai.siggy-lab.org")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("a host with no scheme was accepted")
+	}
+	if !strings.Contains(err.Error(), "OLLAMA_HOST") {
+		t.Errorf("error = %q, want it to name OLLAMA_HOST", err)
+	}
+}
+
+func TestBrowserUseTrimsATrailingSlashFromOllamaHost(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("OLLAMA_HOST", "https://ai.siggy-lab.org/")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.OllamaHost != "https://ai.siggy-lab.org" {
+		t.Errorf("OllamaHost = %q, want the trailing slash trimmed", cfg.OllamaHost)
 	}
 }

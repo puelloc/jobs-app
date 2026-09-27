@@ -14,3 +14,13 @@
 /.gopath/
 /.gocache/
 /.gomodcache/
+
+# Python worker environment for the browser-use tier (M3). It is a build artifact, not
+# source: the worker script is committed, the interpreter and its wheels are not.
+/.venv-browser/
+/.playwright/
+/.browseruse/
+
+# Ad-hoc browser profiles and scratch output from one-off checks (~1,000 vendored extension
+# files). Throwaway artifacts, not source.
+/career-check/
