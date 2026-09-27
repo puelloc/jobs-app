@@ -112,7 +112,7 @@ fi
 
 echo
 echo "==> post-deploy checks passed"
-echo "    UI:   http://<nas-ip>:8089"
+echo "    UI:   http://<nas-ip>:8095"
 echo "    API:  http://<nas-ip>:8094/api/runs"
 echo "    a fresh data volume needs, in order:"
 echo "      docker compose run --rm app sp1500           # companies + career sites"

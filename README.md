@@ -61,7 +61,7 @@ Two images: the Go API + browser-use worker (`Dockerfile`), and the SvelteKit UI
 
 That script handles the `PUID`/`PGID` ownership of `./data` (SQLite must be writable by the
 container user), rebuilds with `docker compose up -d --build --remove-orphans`, and reports any
-restart-loop or API failure. The API is on host port `8094`, the UI on `8089`.
+restart-loop or API failure. The API is on host port `8094`, the UI on `8095`.
 
 A fresh `./data` volume starts empty, so populate it in order:
 
