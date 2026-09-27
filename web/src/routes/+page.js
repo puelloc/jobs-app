@@ -1,21 +1,24 @@
 import { error } from '@sveltejs/kit';
-import { getJobs } from '$lib/api.js';
+import { getRuns } from '$lib/api.js';
 
 // Server-rendered: this runs during SSR so the first HTML response already
-// contains the jobs. Nothing fetches in the browser on first load.
+// contains the runs. The page then re-runs it on an interval via invalidate to
+// pick up live status.
 /** @type {import('./$types').PageLoad} */
-export async function load({ url }) {
+export async function load({ url, depends }) {
+	depends('data:runs');
+
 	let data;
 	try {
-		data = await getJobs({ limit: 25, offset: 0 }, { origin: url.origin });
+		data = await getRuns({ limit: 100, offset: 0 }, { origin: url.origin });
 	} catch (failure) {
 		// The API's own message when it sent an error envelope; a readable
 		// fallback when the failure never reached the API at all.
-		error(failure?.status ?? 500, failure?.message ?? 'Could not load jobs');
+		error(failure?.status ?? 500, failure?.message ?? 'Could not load runs');
 	}
 
 	return {
-		jobs: data.jobs,
+		runs: data.runs,
 		total: data.total,
 		limit: data.limit,
 		offset: data.offset

@@ -1,63 +1,104 @@
 <script>
-	import { navigating } from '$app/state';
-	import JobCard from '$lib/JobCard.svelte';
+	import { invalidate } from '$app/navigation';
+	import { onMount } from 'svelte';
+	import { formatDuration, formatRunStatus, formatUtc } from '$lib/format.js';
 
 	let { data } = $props();
 
-	// load() owns this data: it is replaced wholesale on navigation and never
-	// mutated in place, so it needs no local state and no deep reactivity.
-	const jobs = $derived(data.jobs);
-	const total = $derived(data.total);
+	// load() owns this data: it is replaced wholesale whenever invalidate
+	// re-runs it, so it needs no local state and no deep reactivity.
+	const runs = $derived(data.runs ?? []);
+	const total = $derived(data.total ?? 0);
+	const running = $derived(runs.filter((r) => r.status === 'running'));
+	const history = $derived(runs.filter((r) => r.status !== 'running'));
 
-	// `navigating` is always an object; `to` is null unless a client-side
-	// navigation is in flight. That keeps this line off the server-rendered
-	// first paint, which already contains the jobs.
-	const isLoading = $derived(navigating.to !== null);
+	// Poll the load function so in-flight runs and new finishes show up without
+	// a manual refresh. invalidate() re-runs load on the client only.
+	onMount(() => {
+		const timer = setInterval(() => invalidate('data:runs'), 5000);
+		return () => clearInterval(timer);
+	});
 </script>
 
 <svelte:head>
-	<title>Jobs</title>
-	<meta name="description" content="Scraped software engineering job listings" />
+	<title>Runs · Jobs dashboard</title>
+	<meta name="description" content="Status and history of scraper and validation runs" />
 </svelte:head>
 
 <main>
-	<header>
-		<h1>Jobs</h1>
-		<p class="count">
-			{total} {total === 1 ? 'job' : 'jobs'} · <a href="/companies">browse companies →</a>
-		</p>
-	</header>
+	<div class="heading">
+		<h1>Runs</h1>
+		<p class="sub">Scraper and validation job runs · {total} total · refreshes every 5s</p>
+	</div>
 
-	{#if isLoading}
-		<p class="loading">Loading jobs…</p>
-	{/if}
+	<section class="section">
+		<h2>Running</h2>
+		{#if running.length === 0}
+			<p class="quiet">Nothing running right now.</p>
+		{:else}
+			<ul class="run-list">
+				{#each running as run (run.id)}
+					<li class="run run-running">
+						<span class="dot" aria-hidden="true"></span>
+						<div class="run-main">
+							<span class="platform">{run.platform}</span>
+							<span class="badge badge-running">Running</span>
+						</div>
+						<div class="meta">started {formatUtc(run.started_at)} · #{run.id}</div>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</section>
 
-	{#if total === 0}
-		<p class="empty">No jobs yet. Run the scraper, then reload this page.</p>
-	{:else}
-		<ul class="jobs">
-			{#each jobs as job (job.id)}
-				<li>
-					<JobCard {job} />
-				</li>
-			{/each}
-		</ul>
-	{/if}
+	<section class="section">
+		<h2>History</h2>
+		{#if history.length === 0}
+			<p class="empty">No finished runs yet. Run a job, then this page will pick it up.</p>
+		{:else}
+			<ul class="run-list">
+				{#each history as run (run.id)}
+					<li class="run">
+						<div class="run-main">
+							<span class="platform">{run.platform}</span>
+							<span class="badge badge-{run.status}">{formatRunStatus(run.status)}</span>
+						</div>
+						<div class="meta">
+							<span>#{run.id}</span>
+							<span>{formatUtc(run.started_at)}</span>
+							{#if run.finished_at}
+								<span>{formatDuration(run.started_at, run.finished_at)}</span>
+							{/if}
+							<span class="counts">
+								{run.items_found} found · {run.items_inserted} in · {run.items_updated} up
+								{#if run.items_wrong || run.items_unverifiable}
+									· {run.items_wrong} wrong · {run.items_unverifiable} unverifiable
+								{/if}
+								{#if run.dry_run}· dry run{/if}
+							</span>
+						</div>
+						{#if run.error_text}
+							<p class="error">{run.error_text}</p>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</section>
 </main>
 
 <style>
 	main {
-		max-width: 1200px;
+		max-width: 960px;
 		margin: 0 auto;
 		padding: 2rem 1.5rem 4rem;
 	}
 
-	header {
+	.heading {
 		display: flex;
 		align-items: baseline;
 		gap: 0.75rem;
-		border-bottom: 2px solid #1c1e21;
-		padding-bottom: 0.5rem;
+		margin-bottom: 1.25rem;
 	}
 
 	h1 {
@@ -65,27 +106,140 @@
 		font-size: 1.5rem;
 	}
 
-	.count {
+	.sub {
 		margin: 0;
 		color: #6b7178;
 		font-size: 0.9rem;
 	}
 
-	.loading,
-	.empty {
-		margin: 1.5rem 0 0;
-		color: #4a4f55;
+	.section h2 {
+		margin: 0 0 0.5rem;
+		font-size: 0.82rem;
+		font-weight: 650;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		color: #6b7178;
 	}
 
-	.jobs {
+	.section + .section {
+		margin-top: 1.75rem;
+	}
+
+	.quiet,
+	.empty {
+		margin: 0;
+		color: #6b7178;
+	}
+
+	.empty {
+		margin-top: 0.25rem;
+	}
+
+	.run-list {
 		list-style: none;
 		margin: 0;
 		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.run {
+		position: relative;
+		padding: 0.7rem 0.9rem;
+		background: #ffffff;
+		border: 1px solid #e4e7ec;
+		border-radius: 8px;
+	}
+
+	.run-running {
+		border-left: 3px solid #1a7f37;
+	}
+
+	.run-main {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+	}
+
+	.platform {
+		font-weight: 600;
+	}
+
+	.badge {
+		padding: 0.05rem 0.5rem;
+		border-radius: 999px;
+		border: 1px solid currentColor;
+		font-size: 0.75rem;
+		font-weight: 650;
+		letter-spacing: 0.02em;
+	}
+
+	.badge-ok {
+		color: #1a7f37;
+	}
+
+	.badge-error {
+		color: #c62828;
+	}
+
+	.badge-running {
+		color: #1a7f37;
+	}
+
+	.meta {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.25rem 0.9rem;
+		margin-top: 0.3rem;
+		font-size: 0.82rem;
+		color: #6b7178;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.counts {
+		color: #8a9099;
+	}
+
+	.error {
+		margin: 0.4rem 0 0;
+		font-size: 0.82rem;
+		color: #c62828;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	.dot {
+		position: absolute;
+		left: -0.4rem;
+		top: 50%;
+		width: 0.6rem;
+		height: 0.6rem;
+		margin-top: -0.3rem;
+		border-radius: 50%;
+		background: #2da44e;
+		animation: pulse 1.4s ease-in-out infinite;
+	}
+
+	@keyframes pulse {
+		0%,
+		100% {
+			opacity: 1;
+		}
+		50% {
+			opacity: 0.35;
+		}
 	}
 
 	@media (max-width: 600px) {
 		main {
 			padding: 1.25rem 1rem 3rem;
+		}
+
+		.heading {
+			flex-direction: column;
+			gap: 0.1rem;
 		}
 	}
 </style>

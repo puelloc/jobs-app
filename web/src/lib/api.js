@@ -5,13 +5,6 @@
  * No retries, no timeouts beyond the browser's own, and no reactive state -
  * load() functions import this module and nothing else does.
  *
- * @typedef {{ status: number, code: string, message: string }} ApiFailure
- */
-
-/**
- * GET one JSON endpoint and either resolve with the parsed body or reject with
- * the { status, code, message } shape the routes turn into error pages.
- *
  * `origin` is the origin the current page was requested with. In the browser a
  * relative URL would be enough, but there is nothing for the server render to be
  * relative to, and SvelteKit's own event.fetch routes a same-origin /api request
@@ -19,6 +12,12 @@
  * by its own origin keeps a single code path: the request lands on Vite, whose
  * /api proxy forwards it to the Go API.
  *
+ * @typedef {{ status: number, code: string, message: string }} ApiFailure
+ */
+
+/**
+ * GET one JSON endpoint and either resolve with the parsed body or reject with
+ * the { status, code, message } shape the routes turn into error pages.
  * @param {string} path
  * @param {{ origin?: string }} [options]
  * @returns {Promise<any>}
@@ -57,80 +56,11 @@ async function getJSON(path, { origin = '' } = {}) {
 }
 
 /**
- * One page of jobs, most recent first, plus the envelope's total.
+ * One page of runs, newest first, plus the envelope's total.
  * @param {{ limit?: number, offset?: number }} [paging]
  * @param {{ origin?: string }} [options]
- * @returns {Promise<{ jobs: any[], limit: number, offset: number, total: number }>}
+ * @returns {Promise<{ runs: any[], limit: number, offset: number, total: number }>}
  */
-export async function getJobs({ limit = 25, offset = 0 } = {}, options = {}) {
-	return getJSON(`/api/jobs?limit=${limit}&offset=${offset}`, options);
-}
-
-/**
- * One job, including description and the three URLs.
- * @param {string|number} id
- * @param {{ origin?: string }} [options]
- * @returns {Promise<any>}
- */
-export async function getJob(id, options = {}) {
-	return getJSON(`/api/jobs/${encodeURIComponent(id)}`, options);
-}
-
-/**
- * One page of companies, with the directory filters the API accepts.
- *
- * Empty filter values are dropped rather than sent as empty strings: the API
- * treats an absent parameter as "no filter", and sending `resolution=` empty
- * would be indistinguishable from a value it does not recognise, which it
- * rejects with a 400.
- *
- * @param {{ index?: string, resolution?: string, search?: string, limit?: number, offset?: number }} [filter]
- * @param {{ origin?: string }} [options]
- * @returns {Promise<{ companies: any[], limit: number, offset: number, total: number }>}
- */
-export async function getCompanies(
-	{ index = '', resolution = '', search = '', limit = 25, offset = 0 } = {},
-	options = {}
-) {
-	const params = new URLSearchParams();
-	params.set('limit', String(limit));
-	params.set('offset', String(offset));
-	if (index) params.set('index', index);
-	if (resolution) params.set('resolution', resolution);
-	if (search) params.set('search', search);
-	return getJSON(`/api/companies?${params}`, options);
-}
-
-/**
- * One page of careers-URL changes across runs: for each change, the old and new
- * accepted URL with the run each came from.
- *
- * Same parameter discipline as getCompanies: empty filters are dropped rather
- * than sent, because the API treats an absent parameter as "no filter" and an
- * empty value as an unrecognised one.
- *
- * @param {{ index?: string, search?: string, limit?: number, offset?: number }} [filter]
- * @param {{ origin?: string }} [options]
- * @returns {Promise<{ changes: any[], limit: number, offset: number, total: number }>}
- */
-export async function getChurn(
-	{ index = '', search = '', limit = 25, offset = 0 } = {},
-	options = {}
-) {
-	const params = new URLSearchParams();
-	params.set('limit', String(limit));
-	params.set('offset', String(offset));
-	if (index) params.set('index', index);
-	if (search) params.set('search', search);
-	return getJSON(`/api/companies/churn?${params}`, options);
-}
-
-/**
- * One company plus its whole resolution trail.
- * @param {string|number} id
- * @param {{ origin?: string }} [options]
- * @returns {Promise<any>}
- */
-export async function getCompany(id, options = {}) {
-	return getJSON(`/api/companies/${encodeURIComponent(id)}`, options);
+export async function getRuns({ limit = 100, offset = 0 } = {}, options = {}) {
+	return getJSON(`/api/runs?limit=${limit}&offset=${offset}`, options);
 }

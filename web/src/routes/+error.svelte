@@ -1,15 +1,7 @@
 <script>
 	import { page } from '$app/state';
 
-	// A 404 under /jobs/ is a missing job; any other 404 is a missing page. Any
-	// other status is treated as a server-side failure worth naming plainly.
-	const heading = $derived(
-		page.status === 404
-			? page.url.pathname.startsWith('/jobs/')
-				? 'Job not found'
-				: 'Page not found'
-			: 'Something went wrong'
-	);
+	const heading = $derived(page.status === 404 ? 'Page not found' : 'Something went wrong');
 	const message = $derived(page.error?.message ?? 'Unexpected error');
 </script>
 
@@ -20,7 +12,7 @@
 <main>
 	<h1>{heading}</h1>
 	<p class="message">{message}</p>
-	<p><a href="/">← Back to list</a></p>
+	<p><a href="/">← Back to runs</a></p>
 </main>
 
 <style>
