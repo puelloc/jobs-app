@@ -140,6 +140,30 @@ The API owns the data contract: filtering (none in v1, but the place a filter wo
 
 The UI owns presentation: date and money formatting, relative-time phrasing ("last seen 12 days ago"), labels and headings, color, and omitting a field when its value is null. It must not compensate for an inconsistent API: if a required field is missing or a nested shape changes, that is an API bug, not something the UI normalizes around; and the UI must never reconstruct a value the API withheld. The one shared rule is that null means "not known" and is omitted or shown as "Not stated", never as an empty string or a fabricated default.
 
+## Company directory and careers-URL churn (added after v1)
+
+The S&P 1500 workstream (`docs/sp1500-plan.md`) added a second read surface over the same database:
+the company directory and its resolution trail. It follows the same rules as the job views — GET
+only, raw column values out, `null` for "not known", presentation in the UI.
+
+| Method | Path | Query params | Response shape | Used by |
+| --- | --- | --- | --- | --- |
+| GET | `/api/companies` | `index` (`sp500\|sp400\|sp600`), `resolution` (`resolved\|unresolved\|unattempted`), `search`, `limit` (default 25, max 100), `offset` | `{ "companies": [...], "limit", "offset", "total" }` | `/companies` |
+| GET | `/api/companies/{id}` | none | `{ "company": {...}, "attempts": [...] }` — the company plus its whole `url_resolution_attempts` trail, newest run first | `/companies/{id}` |
+| GET | `/api/companies/churn` | `index`, `search`, `limit`, `offset` | `{ "changes": [...], "limit", "offset", "total" }` | `/companies/churn` |
+
+An unrecognised `index` or `resolution` value is a **400**, deliberately: a typo must not silently
+return everything, which would read as a result rather than as a mistake.
+
+**Churn** is the one read that is about history rather than the stored value. A change is two
+accepted careers-kind attempts (`career_site` or `ats_board`) for one company in different runs whose
+`final_url` differs; the endpoint returns the previous URL and the current one with the run each came
+from, newest change first. It ignores `rejected` attempts, `website` (homepage) attempts, and the
+run's accepted `robots_sitemap` rows with an empty `final_url`, none of which are answers. A company
+that changed twice appears twice. The directory shows what is stored now; this shows it moving, which
+is the only way a silently wrong re-resolution is visible without opening every company's trail by
+hand.
+
 ## Deferred — v2 and beyond
 
 - **Applying to a job** — needs a write endpoint and a place to store submissions, which does not exist in the schema; the UI seam is a single action on the detail page.

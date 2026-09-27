@@ -54,6 +54,7 @@
 	{data.total} {data.total === 1 ? 'company' : 'companies'}
 	{#if data.index || data.resolution || data.search}(filtered){/if}
 	· <a href="/">browse jobs →</a>
+	· <a href="/companies/churn">URL changes →</a>
 </p>
 
 <nav class="filters">

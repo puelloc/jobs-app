@@ -21,6 +21,9 @@ func NewRouter(db *sql.DB) http.Handler {
 	mux.HandleFunc("GET /api/jobs", handleListJobs(db))
 	mux.HandleFunc("GET /api/jobs/{id}", handleGetJob(db))
 	mux.HandleFunc("GET /api/companies", handleListCompanies(db))
+	// The literal "churn" is more specific than the {id} wildcard, so Go's mux prefers it and
+	// /api/companies/churn is never parsed as a company id.
+	mux.HandleFunc("GET /api/companies/churn", handleListChurn(db))
 	mux.HandleFunc("GET /api/companies/{id}", handleGetCompany(db))
 
 	// Deliberately no catch-all pattern: registering "/" would match every

@@ -72,6 +72,80 @@ func handleListCompanies(db *sql.DB) http.HandlerFunc {
 	}
 }
 
+// handleListChurn serves GET /api/companies/churn: the companies whose accepted careers URL changed
+// from one run to the next, newest change first.
+//
+// This is the one company read that is about the history rather than the current value: the
+// directory answers "what is stored now", and this answers "what moved", which is the only way a
+// silently wrong re-resolution is visible without reading every company's trail by hand.
+func handleListChurn(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit, err := intQueryParam(r, "limit", defaultLimit)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
+			return
+		}
+		if limit < minLimit || limit > maxLimit {
+			writeError(w, http.StatusBadRequest, codeBadRequest,
+				fmt.Sprintf("limit must be between %d and %d", minLimit, maxLimit))
+			return
+		}
+
+		offset, err := intQueryParam(r, "offset", defaultOffset)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
+			return
+		}
+		if offset < 0 {
+			writeError(w, http.StatusBadRequest, codeBadRequest, "offset must not be negative")
+			return
+		}
+
+		q := r.URL.Query()
+		filter := store.CompanyFilter{
+			IndexMembership: q.Get("index"),
+			Search:          q.Get("search"),
+		}
+		if err := filter.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
+			return
+		}
+
+		rows, total, err := store.ListResolutionChurn(r.Context(), db, filter, limit, offset)
+		if err != nil {
+			writeInternalError(w, fmt.Errorf("list resolution churn: %w", err))
+			return
+		}
+
+		changes := make([]ChurnChange, 0, len(rows))
+		for _, row := range rows {
+			changes = append(changes, ChurnChange{
+				CompanyID: row.CompanyID,
+				Slug:      row.Slug,
+				Name:      row.Name,
+				From: ChurnEndpoint{
+					RunID: row.FromRunID,
+					URL:   row.FromURL,
+					Title: nullStringPtr(row.FromTitle),
+					At:    row.FromAt,
+				},
+				To: ChurnEndpoint{
+					RunID: row.ToRunID,
+					URL:   row.ToURL,
+					Title: nullStringPtr(row.ToTitle),
+					At:    row.ToAt,
+				},
+			})
+		}
+		writeJSON(w, http.StatusOK, ChurnResponse{
+			Changes: changes,
+			Limit:   limit,
+			Offset:  offset,
+			Total:   total,
+		})
+	}
+}
+
 // handleGetCompany serves GET /api/companies/{id}.
 func handleGetCompany(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

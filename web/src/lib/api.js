@@ -102,6 +102,30 @@ export async function getCompanies(
 }
 
 /**
+ * One page of careers-URL changes across runs: for each change, the old and new
+ * accepted URL with the run each came from.
+ *
+ * Same parameter discipline as getCompanies: empty filters are dropped rather
+ * than sent, because the API treats an absent parameter as "no filter" and an
+ * empty value as an unrecognised one.
+ *
+ * @param {{ index?: string, search?: string, limit?: number, offset?: number }} [filter]
+ * @param {{ origin?: string }} [options]
+ * @returns {Promise<{ changes: any[], limit: number, offset: number, total: number }>}
+ */
+export async function getChurn(
+	{ index = '', search = '', limit = 25, offset = 0 } = {},
+	options = {}
+) {
+	const params = new URLSearchParams();
+	params.set('limit', String(limit));
+	params.set('offset', String(offset));
+	if (index) params.set('index', index);
+	if (search) params.set('search', search);
+	return getJSON(`/api/companies/churn?${params}`, options);
+}
+
+/**
  * One company plus its whole resolution trail.
  * @param {string|number} id
  * @param {{ origin?: string }} [options]

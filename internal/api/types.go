@@ -133,3 +133,34 @@ type CompanyDetailResponse struct {
 	Company  CompanyListItem  `json:"company"`
 	Attempts []CompanyAttempt `json:"attempts"`
 }
+
+// --- resolution churn -----------------------------------------------------
+
+// ChurnEndpoint is one side of a careers-URL change: the URL accepted for a company in one run,
+// with the run that accepted it.
+type ChurnEndpoint struct {
+	RunID int64   `json:"run_id"`
+	URL   string  `json:"url"`
+	Title *string `json:"title"`
+	At    string  `json:"at"`
+}
+
+// ChurnChange is one company whose accepted careers URL differs between two runs.
+//
+// From and To are named rather than being two array entries so the direction is unambiguous on the
+// wire; the UI must not have to know the ordering rule to render "old -> new".
+type ChurnChange struct {
+	CompanyID int64         `json:"company_id"`
+	Slug      string        `json:"slug"`
+	Name      string        `json:"name"`
+	From      ChurnEndpoint `json:"from"`
+	To        ChurnEndpoint `json:"to"`
+}
+
+// ChurnResponse is the GET /api/companies/churn envelope.
+type ChurnResponse struct {
+	Changes []ChurnChange `json:"changes"`
+	Limit   int           `json:"limit"`
+	Offset  int           `json:"offset"`
+	Total   int64         `json:"total"`
+}

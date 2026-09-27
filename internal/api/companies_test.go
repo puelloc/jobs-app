@@ -6,6 +6,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"testing"
 )
@@ -55,6 +56,28 @@ type attemptJSON struct {
 type companyDetailJSON struct {
 	Company  companyJSON   `json:"company"`
 	Attempts []attemptJSON `json:"attempts"`
+}
+
+type churnEndpointJSON struct {
+	RunID int64   `json:"run_id"`
+	URL   string  `json:"url"`
+	Title *string `json:"title"`
+	At    string  `json:"at"`
+}
+
+type churnChangeJSON struct {
+	CompanyID int64             `json:"company_id"`
+	Slug      string            `json:"slug"`
+	Name      string            `json:"name"`
+	From      churnEndpointJSON `json:"from"`
+	To        churnEndpointJSON `json:"to"`
+}
+
+type churnResponseJSON struct {
+	Changes []churnChangeJSON `json:"changes"`
+	Limit   int               `json:"limit"`
+	Offset  int               `json:"offset"`
+	Total   int64             `json:"total"`
 }
 
 // --- fixtures -------------------------------------------------------------
@@ -227,5 +250,114 @@ func TestJobRoutesStillWorkAlongsideCompanyRoutes(t *testing.T) {
 	requireJSON(t, rec)
 	if rec.Code != 405 {
 		t.Errorf("POST /api/companies status = %d, want 405", rec.Code)
+	}
+}
+
+// seedChurnFixture writes one company resolved to two different careers URLs in two runs.
+func seedChurnFixture(t *testing.T, database *sql.DB) {
+	t.Helper()
+	if _, err := database.Exec(`INSERT INTO companies (id, slug, name, index_membership)
+		VALUES (1, 'acme', 'Acme Corporation', 'sp500')`); err != nil {
+		t.Fatalf("seed company: %v", err)
+	}
+	for _, id := range []int{4, 5} {
+		if _, err := database.Exec(`INSERT INTO scrape_runs (id, platform_id, started_at, status)
+			VALUES (?, 23, '2026-09-26T00:00:00.000Z', 'ok')`, id); err != nil {
+			t.Fatalf("seed run %d: %v", id, err)
+		}
+	}
+	if _, err := database.Exec(`
+INSERT INTO url_resolution_attempts
+    (company_id, run_id, attempt_index, source, candidate_url, candidate_kind,
+     http_status, final_url, title, validation_status, rejection_reason)
+VALUES
+    (1, 4, 0, 'nav_anchor', 'https://acme.example.com/jobs', 'career_site',
+     200, 'https://acme.example.com/jobs', 'Jobs at Acme', 'accepted', NULL),
+    (1, 5, 0, 'nav_anchor', 'https://acme.example.com/careers', 'career_site',
+     200, 'https://acme.example.com/careers', 'Careers at Acme', 'accepted', NULL)`); err != nil {
+		t.Fatalf("seed attempts: %v", err)
+	}
+}
+
+// The churn endpoint is the only surface that shows a careers URL moving between runs.
+func TestChurnEndpointReportsAChangedURL(t *testing.T) {
+	h, database := newTestServerAndDB(t)
+	seedChurnFixture(t, database)
+
+	rec := do(t, h, "GET", "/api/companies/churn")
+	requireJSON(t, rec)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	var got churnResponseJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode churn %q: %v", rec.Body.String(), err)
+	}
+	if got.Total != 1 || len(got.Changes) != 1 {
+		t.Fatalf("total=%d changes=%d, want 1 and 1", got.Total, len(got.Changes))
+	}
+	c := got.Changes[0]
+	if c.CompanyID != 1 || c.Slug != "acme" || c.Name != "Acme Corporation" {
+		t.Errorf("company = %d/%s/%s", c.CompanyID, c.Slug, c.Name)
+	}
+	if c.From.RunID != 4 || c.From.URL != "https://acme.example.com/jobs" {
+		t.Errorf("from = %+v", c.From)
+	}
+	if c.To.RunID != 5 || c.To.URL != "https://acme.example.com/careers" {
+		t.Errorf("to = %+v", c.To)
+	}
+	if c.From.Title == nil || *c.From.Title != "Jobs at Acme" {
+		t.Errorf("from title = %v", c.From.Title)
+	}
+	if c.From.At == "" || c.To.At == "" {
+		t.Errorf("timestamps missing: %+v", c)
+	}
+}
+
+// No changes must be an empty array, not null: the UI iterates the field and a null would be a
+// contract bug rather than an empty state.
+func TestChurnEndpointReturnsEmptyArrayWhenNothingChanged(t *testing.T) {
+	h, _ := newTestServerAndDB(t)
+	rec := do(t, h, "GET", "/api/companies/churn")
+	requireJSON(t, rec)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var got churnResponseJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode churn %q: %v", rec.Body.String(), err)
+	}
+	if got.Changes == nil {
+		t.Error("changes was JSON null; want []")
+	}
+	if got.Total != 0 {
+		t.Errorf("total = %d, want 0", got.Total)
+	}
+}
+
+// The churn route shares the companies prefix, so its literal segment must win over the {id}
+// wildcard, and an unknown filter on it must still be a 400.
+func TestChurnRouteIsNotParsedAsACompanyIDAndValidatesFilters(t *testing.T) {
+	h, _ := newTestServerAndDB(t)
+
+	// "churn" is not an integer; if the {id} route had won this would be a 400.
+	rec := do(t, h, "GET", "/api/companies/churn")
+	requireJSON(t, rec)
+	if rec.Code != 200 {
+		t.Errorf("/api/companies/churn status = %d, want 200", rec.Code)
+	}
+
+	for _, target := range []string{
+		"/api/companies/churn?index=sp900",
+		"/api/companies/churn?limit=0",
+		"/api/companies/churn?limit=101",
+		"/api/companies/churn?offset=-1",
+	} {
+		rec := do(t, h, "GET", target)
+		requireJSON(t, rec)
+		if rec.Code != 400 {
+			t.Errorf("%s: status = %d, want 400 (body %s)", target, rec.Code, rec.Body.String())
+		}
 	}
 }
