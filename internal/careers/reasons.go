@@ -54,8 +54,11 @@ const (
 	OutcomeBotChallenge Reason = "bot_challenge"
 	// OutcomeParkedDomain means a parking page answered 200. Observed on a stale Wikidata URL.
 	OutcomeParkedDomain Reason = "parked_domain"
-	// OutcomeGenericTitleWithoutCompany means the document title is a vendor default and does not
-	// name the company, which is how Ashby and SmartRecruiters answer for a nonexistent company.
+	// OutcomeGenericTitleWithoutCompany means the document title is a vendor default and the page
+	// is not otherwise corroborated as the company's careers page: the title does not name the
+	// company, and either the host does not name it or the URL is not careers-shaped. This covers
+	// the vendor answering for a nonexistent company (Ashby's "Jobs") and a non-careers page on the
+	// company's own domain whose generic title would otherwise pass on the host token alone.
 	OutcomeGenericTitleWithoutCompany Reason = "generic_title_without_company"
 	// OutcomeUnverifiableATSTitle means the page is third-party hosted and the caller supplied no
 	// usable company token, so the page cannot be corroborated at all. The absent-input case is its

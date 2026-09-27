@@ -441,6 +441,68 @@ func TestGenericTitleAcceptedWhenHostCarriesCompanyToken(t *testing.T) {
 	}
 }
 
+// The host-token exemption was added so a generic title on the company's own domain would not be
+// rejected (boeing.com/company/careers, title "Careers"). Taken alone it reopened the door, because
+// a generic title is itself careers evidence later in the gate: any page on the company's host whose
+// title is a generic careers word was accepted regardless of path. A company news article titled
+// "Careers" is the case - the host names the company, the title says careers, and the path says
+// neither.
+func TestGenericTitleOnCompanyHostWithoutCareersPathIsRejected(t *testing.T) {
+	v := Validate(
+		Candidate{
+			URL: "https://www.example.com/news/2026/01/company-announcement", Kind: KindCareerSite,
+			CompanyName: "Example Corp", Source: "sitemap",
+		},
+		htmlResponse("https://www.example.com/news/2026/01/company-announcement",
+			`<html><head><title>Careers</title></head><body><h1>Company news</h1>`+
+				`<p>Announcements from across the business.</p></body></html>`),
+	)
+	if v.Accepted() {
+		t.Fatalf("accepted a company news page because its host carries the company token: %+v", v)
+	}
+	if v.Reason != OutcomeGenericTitleWithoutCompany {
+		t.Errorf("reason = %q, want %q", v.Reason, OutcomeGenericTitleWithoutCompany)
+	}
+}
+
+// The same hole, stated the other way round: a products page titled "Jobs" is not a careers page,
+// and the host token must not be able to say it is.
+func TestGenericTitleOnCompanyProductsPathIsRejected(t *testing.T) {
+	v := Validate(
+		Candidate{
+			URL: "https://www.example.com/products/all", Kind: KindCareerSite,
+			CompanyName: "Example Corp", Source: "sitemap",
+		},
+		htmlResponse("https://www.example.com/products/all",
+			`<html><head><title>Jobs</title></head><body><h1>Our products</h1>`+
+				`<p>Everything we make.</p></body></html>`),
+	)
+	if v.Accepted() {
+		t.Fatalf("accepted a products page because its host carries the company token: %+v", v)
+	}
+}
+
+// The other direction: a branded careers subdomain is corroboration in its own right even when the
+// path says nothing. newellbrands' stored careers URL is careers.newellbrands.com/index with the
+// title "Careers", so requiring a careers-shaped *path* alone would reject a real page.
+func TestGenericTitleOnBrandedCareersHostIsAccepted(t *testing.T) {
+	v := Validate(
+		Candidate{
+			URL: "https://careers.newellbrands.com/index", Kind: KindCareerSite,
+			CompanyName: "Newell Brands", Source: "nav_anchor",
+		},
+		htmlResponse("https://careers.newellbrands.com/index",
+			`<html><head><title>Careers</title></head><body><h1>Careers</h1>`+
+				`<p>Search jobs</p></body></html>`),
+	)
+	if !v.Accepted() {
+		t.Fatalf("rejected a branded careers subdomain with a generic title: %+v", v)
+	}
+	if v.Reason != OutcomeHTMLCareers {
+		t.Errorf("reason = %q, want %q", v.Reason, OutcomeHTMLCareers)
+	}
+}
+
 // The exemption must not weaken the fake-slug defence: the failing hosts name the vendor, not the
 // company, so neither the title nor the host carries a token.
 func TestGenericTitleStillRejectedOnThirdPartyHostWithoutCompanyToken(t *testing.T) {

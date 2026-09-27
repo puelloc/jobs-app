@@ -219,9 +219,19 @@ func validateHTML(v Verdict, c Candidate, r Response) Verdict {
 		// Boeing, which is not a generic page however generic its title reads. Requiring the token
 		// in the title rejected it.
 		//
+		// The host token is not enough on its own, though. A generic title is itself careers
+		// evidence further down this function (hasCareersSignal("Careers") is true), so host-only
+		// corroboration accepted any page on the company's own domain whose title was a generic
+		// careers word: a /news/ article titled "Careers", a /products/ page titled "Jobs". The
+		// company's host says who the page belongs to, not what it is. Require the URL to be
+		// careers-shaped as well - in its path (/company/careers) or, for a branded careers
+		// subdomain, in its host (careers.newellbrands.com, jobs.teradyne.com).
+		//
 		// This does not weaken the fake-slug defence, because those hosts name the vendor rather
 		// than the company: jobs.ashbyhq.com/zzzznotrealco999 carries neither token.
-		if !containsCompanyToken(title, c.CompanyName) && !containsCompanyToken(hostOfURL(v.FinalURL), c.CompanyName) {
+		titleNamesCompany := containsCompanyToken(title, c.CompanyName)
+		hostNamesCompany := containsCompanyToken(hostOfURL(v.FinalURL), c.CompanyName)
+		if !titleNamesCompany && !(hostNamesCompany && careersShapedLocation(v.FinalURL)) {
 			v.Status = StatusRejected
 			v.Reason = OutcomeGenericTitleWithoutCompany
 			return v
@@ -523,6 +533,17 @@ func hasCareersPath(raw string) bool {
 		}
 	}
 	return false
+}
+
+// careersShapedLocation reports whether the URL itself names careers or jobs, in its path or its
+// host. The gate uses it to decide whether a company-named host may corroborate a generic title:
+// www.company.com/news/ says nothing about careers, while www.company.com/company/careers does, and
+// a branded subdomain like careers.newellbrands.com says it in the host even when the path is /index.
+func careersShapedLocation(raw string) bool {
+	if hasCareersPath(raw) {
+		return true
+	}
+	return hasCareersSignal(hostOfURL(raw))
 }
 
 // localeSegment matches a bare locale path segment such as "en", "en-us", "en_US", "pt-br".
