@@ -50,6 +50,7 @@ func TestOpenCreatesEveryTable(t *testing.T) {
 	want := []string{
 		"companies",
 		"company_application_platforms",
+		"company_sources",
 		"job_listings",
 		"platforms",
 		"schema_migrations",
@@ -826,5 +827,81 @@ func TestParseDirectives(t *testing.T) {
 				t.Errorf("foreignKeysOff = %v, want %v", got.foreignKeysOff, tc.wantFkOff)
 			}
 		})
+	}
+}
+
+// --- company_sources (migration 013) --------------------------------------
+
+// The point of company_sources is that a source is data, so a company can carry several without a
+// schema change. This pins the shape that makes that work: the two foreign keys, and a uniqueness
+// rule that turns a repeated contribution into an update rather than a duplicate.
+func TestCompanySourcesRecordsOneContributionPerSource(t *testing.T) {
+	database := openTest(t)
+
+	if _, err := database.Exec(`
+INSERT INTO companies (id, slug, name) VALUES (1, 'acme', 'Acme Inc.')`); err != nil {
+		t.Fatalf("seed company: %v", err)
+	}
+
+	// Two different sources contribute the same company. This is the case the old schema could not
+	// express at all: index_membership could only hold one source's answer.
+	for _, platform := range []int{20, 1} {
+		if _, err := database.Exec(`
+INSERT INTO company_sources (company_id, platform_id, source_key, first_seen_at, last_seen_at)
+VALUES (1, ?, '', '2026-09-27T00:00:00.000Z', '2026-09-27T00:00:00.000Z')`, platform); err != nil {
+			t.Fatalf("insert contribution from platform %d: %v", platform, err)
+		}
+	}
+
+	var n int
+	if err := database.QueryRow(`SELECT count(*) FROM company_sources WHERE company_id = 1`).Scan(&n); err != nil {
+		t.Fatalf("count contributions: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("contributions = %d, want 2 - one per source", n)
+	}
+
+	// The same source contributing the same company twice is an update, which is what lets a source's
+	// import be re-run.
+	if _, err := database.Exec(`
+INSERT INTO company_sources (company_id, platform_id, source_key, first_seen_at, last_seen_at)
+VALUES (1, 20, '', '2026-09-28T00:00:00.000Z', '2026-09-28T00:00:00.000Z')
+ON CONFLICT(company_id, platform_id, source_key)
+DO UPDATE SET last_seen_at = excluded.last_seen_at`); err != nil {
+		t.Fatalf("repeat contribution: %v", err)
+	}
+	var refreshed string
+	if err := database.QueryRow(`
+SELECT last_seen_at FROM company_sources WHERE company_id = 1 AND platform_id = 20`).Scan(&refreshed); err != nil {
+		t.Fatalf("read refreshed contribution: %v", err)
+	}
+	if refreshed != "2026-09-28T00:00:00.000Z" {
+		t.Errorf("last_seen_at = %q, want the repeat visit to have moved it", refreshed)
+	}
+
+	// A contribution must name a real company and a real platform.
+	if _, err := database.Exec(`
+INSERT INTO company_sources (company_id, platform_id, source_key, first_seen_at, last_seen_at)
+VALUES (999, 20, '', '2026-09-27T00:00:00.000Z', '2026-09-27T00:00:00.000Z')`); err == nil {
+		t.Error("a contribution for a nonexistent company was accepted; the foreign key is not doing its job")
+	}
+	if _, err := database.Exec(`
+INSERT INTO company_sources (company_id, platform_id, source_key, first_seen_at, last_seen_at)
+VALUES (1, 9999, '', '2026-09-27T00:00:00.000Z', '2026-09-27T00:00:00.000Z')`); err == nil {
+		t.Error("a contribution from a nonexistent platform was accepted")
+	}
+}
+
+// The backfills in 013 run during the migration, so what can be asserted afterwards is that a fresh
+// database ships the table empty rather than carrying rows from nowhere.
+func TestCompanySourcesStartsEmptyOnAFreshDatabase(t *testing.T) {
+	database := openTest(t)
+
+	var n int
+	if err := database.QueryRow(`SELECT count(*) FROM company_sources`).Scan(&n); err != nil {
+		t.Fatalf("count company_sources: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("company_sources = %d rows on a fresh database, want 0", n)
 	}
 }

@@ -103,3 +103,15 @@ Deliberately deferred, because it changes the build story:
   would be separate, dedicated triggers) or an explicit rebuild step after each scrape.
 - Migration ordering still holds: an FTS migration is just another numbered file, applied in
   lexical order like any other. It must be added as its own file; never edit `001_init.sql`.
+
+## One-off data scripts are not migrations
+
+`oneoff/` holds SQL that moves or repairs **rows**, not schema: `consolidate_sp1500_into_jobs_db.sql`
+merged a second database file into this one on 2026-09-27. It is deliberately outside `migrations/`
+because `//go:embed migrations/*.sql` does not pick it up, and it must never run on a fresh database —
+a migration describes the shape every database should have, whereas a one-off script describes
+something that happened once to one file.
+
+The rule: if a change must hold for every database including new ones, it is a migration. If it is
+"move these rows from the file we accidentally created into the file we already had", it is a oneoff
+script, it is run by hand, and it is committed for the record rather than executed by the runner.
