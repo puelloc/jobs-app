@@ -24,15 +24,23 @@
 
 	let pending = $state('');
 	let triggerError = $state('');
+	let warning = $state('');
 
 	async function trigger(name) {
 		pending = name;
 		triggerError = '';
 		try {
 			const res = await postJob(name);
-			await goto(`/runs/${res.run_id}`);
+			// Self-tracking jobs return run_id 0 (their own run appears on the dashboard);
+			// server-tracked jobs return the run to watch directly.
+			await goto(res.run_id ? `/runs/${res.run_id}` : '/');
 		} catch (failure) {
-			triggerError = failure?.message ?? `Could not start ${name}`;
+			// A 409 means a job is already running: surface it as a popup, not an inline note.
+			if (failure?.code === 'conflict') {
+				warning = failure.message;
+			} else {
+				triggerError = failure?.message ?? `Could not start ${name}`;
+			}
 			pending = '';
 		}
 	}
@@ -131,6 +139,22 @@
 		{/if}
 	</section>
 </main>
+
+{#if warning}
+	<div class="modal-backdrop" role="presentation" onclick={() => (warning = '')}>
+		<div
+			class="modal"
+			role="alertdialog"
+			aria-modal="true"
+			aria-label="Job already running"
+			onclick={(e) => e.stopPropagation()}
+		>
+			<p class="modal-title">⚠️ A job is already running</p>
+			<p class="modal-body">{warning}</p>
+			<button class="modal-close" onclick={() => (warning = '')}>OK</button>
+		</div>
+	</div>
+{/if}
 
 <style>
 	main {
@@ -323,5 +347,47 @@
 			flex-direction: column;
 			gap: 0.1rem;
 		}
+	}
+
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(23, 27, 33, 0.45);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 100;
+	}
+
+	.modal {
+		width: min(26rem, calc(100vw - 2rem));
+		padding: 1.25rem 1.25rem 1rem;
+		background: #ffffff;
+		border-radius: 10px;
+		box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+	}
+
+	.modal-title {
+		margin: 0 0 0.4rem;
+		font-size: 1.05rem;
+		font-weight: 650;
+	}
+
+	.modal-body {
+		margin: 0 0 1rem;
+		color: #6b7178;
+	}
+
+	.modal-close {
+		display: block;
+		margin-left: auto;
+		padding: 0.4rem 1rem;
+		border: 1px solid #1a7f37;
+		border-radius: 6px;
+		background: #1a7f37;
+		color: #ffffff;
+		font-size: 0.85rem;
+		font-weight: 600;
+		cursor: pointer;
 	}
 </style>

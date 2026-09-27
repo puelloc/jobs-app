@@ -35,12 +35,23 @@ var triggerableJobs = map[string]jobSpec{
 	"scraper":  {bin: "scraper", platform: "remoteok"},
 }
 
-// JobResponse is the POST /api/pipeline/{name} response.
+// selfTrackingJobs are the commands that already create their own scrape_runs rows. The server must
+// NOT create a run for them too: doing so showed two identical "career_resolution Running" rows for
+// one click. Their output is teed into the server log instead of a per-run file.
+var selfTrackingJobs = map[string]bool{
+	"sp1500":   true, // indices -> wikipedia_sp500/400/600
+	"resolve":  true, // -> career_resolution
+	"validate": true, // -> career_validation
+	"scraper":  true, // -> remoteok
+}
+
+// JobResponse is the POST /api/pipeline/{name} response. RunID is 0 for a self-tracking job, whose
+// own run appears on the dashboard once the command starts.
 type JobResponse struct {
 	RunID int64 `json:"run_id"`
 }
 
-// handleTriggerJob serves POST /api/jobs/{name}.
+// handleTriggerJob serves POST /api/pipeline/{name}.
 func handleTriggerJob(db *sql.DB, dataDir string, gate *jobGate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
@@ -52,6 +63,40 @@ func handleTriggerJob(db *sql.DB, dataDir string, gate *jobGate) http.HandlerFun
 
 		if !gate.tryAcquire() {
 			writeError(w, http.StatusConflict, codeConflict, "a job is already running; try again when it finishes")
+			return
+		}
+
+		if selfTrackingJobs[name] {
+			// The command records its own run(s); the server only launches it and captures its
+			// output into the server log.
+			logsDir := filepath.Join(dataDir, "logs")
+			if err := os.MkdirAll(logsDir, 0o755); err != nil {
+				gate.release()
+				writeInternalError(w, fmt.Errorf("create logs dir: %w", err))
+				return
+			}
+			logf, err := os.OpenFile(filepath.Join(logsDir, "server.log"),
+				os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+			if err != nil {
+				gate.release()
+				writeInternalError(w, fmt.Errorf("open server log: %w", err))
+				return
+			}
+			cmd := exec.Command(spec.bin, spec.args...)
+			cmd.Stdout = logf
+			cmd.Stderr = logf
+			if err := cmd.Start(); err != nil {
+				_ = logf.Close()
+				gate.release()
+				writeInternalError(w, fmt.Errorf("launch %s: %w", spec.bin, err))
+				return
+			}
+			go func() {
+				_ = cmd.Wait()
+				_ = logf.Close()
+				gate.release()
+			}()
+			writeJSON(w, http.StatusAccepted, JobResponse{RunID: 0})
 			return
 		}
 
@@ -94,9 +139,7 @@ func handleTriggerJob(db *sql.DB, dataDir string, gate *jobGate) http.HandlerFun
 			return
 		}
 
-		// Reap the process, close the log, and finish the run in the background. The command's
-		// own sub-runs (sp1500's per-index runs, batch's per-company scrapes) carry the real item
-		// counts; this run records the job's exit status.
+		// Reap the process, close the log, and finish the run in the background.
 		go func() {
 			waitErr := cmd.Wait()
 			_ = logf.Close()

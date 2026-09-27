@@ -65,10 +65,12 @@ func TestTriggerJob_UnknownNameIs404(t *testing.T) {
 }
 
 func TestTriggerJob_StartsRunAndCapturesLog(t *testing.T) {
-	writeFakeJob(t, "sp1500", "echo fake-sp1500-ran")
+	// classify is server-tracked (it does not create its own run), so the server records the run
+	// and captures stdout to a per-run log file.
+	writeFakeJob(t, "classify", "echo fake-classify-ran")
 
 	h, database, dataDir := newJobsTestServer(t)
-	rec := do(t, h, http.MethodPost, "/api/pipeline/sp1500")
+	rec := do(t, h, http.MethodPost, "/api/pipeline/classify")
 	requireStatus(t, rec, http.StatusAccepted)
 
 	var got JobResponse
@@ -102,6 +104,23 @@ func TestTriggerJob_StartsRunAndCapturesLog(t *testing.T) {
 	}
 	if log.Log == "" {
 		t.Error("log is empty; want the fake command's output")
+	}
+}
+
+func TestTriggerJob_SelfTrackingReturnsZeroRunID(t *testing.T) {
+	// sp1500 (indices) creates its own runs, so the server must not create one too.
+	writeFakeJob(t, "sp1500", "echo fake-sp1500-ran")
+
+	h, _, _ := newJobsTestServer(t)
+	rec := do(t, h, http.MethodPost, "/api/pipeline/sp1500")
+	requireStatus(t, rec, http.StatusAccepted)
+
+	var got JobResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.RunID != 0 {
+		t.Errorf("run_id = %d, want 0 (self-tracking job)", got.RunID)
 	}
 }
 
