@@ -30,7 +30,8 @@ func NewRouter(db *sql.DB, dataDir string, scrapeCmd []string) http.Handler {
 	mux.HandleFunc("GET /api/runs", handleListRuns(db))
 	mux.HandleFunc("GET /api/runs/{id}", handleGetRun(db))
 	mux.HandleFunc("GET /api/traces/{id}", handleGetTrace(dataDir))
-	mux.HandleFunc("POST /api/companies/{id}/scrape", handleScrapeCompany(db, scrapeCmd, gate))
+	mux.HandleFunc("GET /api/logs/server", handleGetServerLog(dataDir))
+	mux.HandleFunc("POST /api/companies/{id}/scrape", handleScrapeCompany(db, dataDir, scrapeCmd, gate))
 	mux.HandleFunc("POST /api/pipeline/{name}", handleTriggerJob(db, dataDir, gate))
 	mux.HandleFunc("GET /api/pipeline/{id}/log", handleGetJobLog(dataDir))
 

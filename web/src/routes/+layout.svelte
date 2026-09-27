@@ -30,6 +30,11 @@
 				class:active={isActive('/jobs')}
 				aria-current={isActive('/jobs') ? 'page' : undefined}>Jobs</a
 			>
+			<a
+				href="/logs"
+				class:active={isActive('/logs')}
+				aria-current={isActive('/logs') ? 'page' : undefined}>Logs</a
+			>
 		</nav>
 	</header>
 	{@render children()}

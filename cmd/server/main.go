@@ -10,9 +10,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +28,22 @@ import (
 // shutdownTimeout bounds how long in-flight requests may finish after a signal.
 const shutdownTimeout = 5 * time.Second
 
+// teeServerLog appends the standard logger's output to <dataDir>/logs/server.log, in addition to
+// stderr, so the UI's GET /api/logs/server can show the server's own runtime errors. The file is
+// held open for the life of the process and closed on exit.
+func teeServerLog(dataDir string) error {
+	dir := filepath.Join(dataDir, "logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "server.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	return nil
+}
+
 func main() {
 	os.Exit(run())
 }
@@ -36,6 +55,12 @@ func run() int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "server: config: %v\n", err)
 		return 1
+	}
+
+	// Tee the standard logger (used by the api package to log internal errors) into a file so
+	// GET /api/logs/server can surface the server's own runtime errors in the UI.
+	if err := teeServerLog(cfg.DataDir); err != nil {
+		fmt.Fprintf(os.Stderr, "server: could not open log file: %v\n", err)
 	}
 
 	// db.Open applies the DSN pragmas and runs any pending migrations, so a

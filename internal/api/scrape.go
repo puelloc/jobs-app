@@ -10,7 +10,9 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 
 	"jobsapp/internal/store"
@@ -23,7 +25,7 @@ type ScrapeResponse struct {
 }
 
 // handleScrapeCompany serves POST /api/companies/{id}/scrape.
-func handleScrapeCompany(db *sql.DB, scrapeCmd []string, gate *jobGate) http.HandlerFunc {
+func handleScrapeCompany(db *sql.DB, dataDir string, scrapeCmd []string, gate *jobGate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if len(scrapeCmd) == 0 {
 			writeError(w, http.StatusServiceUnavailable, codeInternal, "scrape command is not configured (SCRAPE_COMMAND)")
@@ -70,18 +72,39 @@ func handleScrapeCompany(db *sql.DB, scrapeCmd []string, gate *jobGate) http.Han
 			return
 		}
 
+		// Capture the scrape's stdout to a log file (the same shape as pipeline jobs) so the run
+		// page can show its summary alongside the agent trace.
+		jobsDir := filepath.Join(dataDir, "jobs")
+		if err := os.MkdirAll(jobsDir, 0o755); err != nil {
+			gate.release()
+			_ = store.FinishRun(r.Context(), db, runID, "error", 0, 0, 0, strPtr(fmt.Sprintf("log dir: %v", err)))
+			writeInternalError(w, fmt.Errorf("create log dir: %w", err))
+			return
+		}
+		logf, err := os.Create(filepath.Join(jobsDir, fmt.Sprintf("%d.log", runID)))
+		if err != nil {
+			gate.release()
+			_ = store.FinishRun(r.Context(), db, runID, "error", 0, 0, 0, strPtr(fmt.Sprintf("log file: %v", err)))
+			writeInternalError(w, fmt.Errorf("create log file: %w", err))
+			return
+		}
+
 		// Fire-and-forget: cmd/scrape owns its run (it finishes it), so the request returns the id
 		// immediately and a goroutine reaps the process when it exits, releasing the gate then.
 		args := append([]string{}, scrapeCmd[1:]...)
 		args = append(args, "--slug", slug, "--vendor", vendor, "--run-id", fmt.Sprintf("%d", runID))
 		cmd := exec.Command(scrapeCmd[0], args...)
+		cmd.Stdout = logf
+		cmd.Stderr = logf
 		if err := cmd.Start(); err != nil {
+			_ = logf.Close()
 			gate.release()
 			writeInternalError(w, fmt.Errorf("launch scrape: %w", err))
 			return
 		}
 		go func() {
 			_ = cmd.Wait()
+			_ = logf.Close()
 			gate.release()
 		}()
 

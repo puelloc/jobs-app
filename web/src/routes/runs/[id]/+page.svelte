@@ -79,7 +79,16 @@
 	</section>
 
 	<section class="section">
-		{#if isAgentRun}
+		<h2>Output</h2>
+		{#if !logPresent || !log}
+			<p class="quiet">No output yet.</p>
+		{:else}
+			<pre class="log">{log}</pre>
+		{/if}
+	</section>
+
+	{#if isAgentRun}
+		<section class="section">
 			<h2>Agent trace</h2>
 			{#if !present && events.length === 0}
 				<p class="quiet">No trace yet — the agent has not written its first step.</p>
@@ -118,15 +127,8 @@
 					{/each}
 				</ol>
 			{/if}
-		{:else}
-			<h2>Output</h2>
-			{#if !logPresent || !log}
-				<p class="quiet">No output yet.</p>
-			{:else}
-				<pre class="log">{log}</pre>
-			{/if}
-		{/if}
-	</section>
+		</section>
+	{/if}
 
 	<p><a href="/" class="back">← Back to runs</a></p>
 </main>

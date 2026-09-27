@@ -185,3 +185,13 @@ export async function postJob(name) {
 export async function getJobLog(id, options = {}) {
 	return getJSON(`/api/pipeline/${id}/log`, options);
 }
+
+/**
+ * The server's own runtime log (the tail of the Go server's stderr), for
+ * debugging trigger/launch failures without shelling into the container.
+ * @param {{ fetch?: typeof fetch }} [options]
+ * @returns {Promise<{ log: string }>}
+ */
+export async function getServerLog(options = {}) {
+	return getJSON(`/api/logs/server`, options);
+}
