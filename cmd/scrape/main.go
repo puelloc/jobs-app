@@ -185,6 +185,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		runID, company.Slug, probe.Answer.HasRemoteSoftwareRoles,
 		probe.Answer.RemoteSoftwareRoleCount, probe.Answer.Evidence)
 
+	// If the agent found no remote roles, there is nothing to scrape. Skip the fetch rather than
+	// extracting onsite postings and marking them remote.
+	if !probe.Answer.HasRemoteSoftwareRoles {
+		finish("ok", 0, 0, 0, "")
+		fmt.Fprintf(stdout, "run_id=%d company=%s no_remote_roles=true found=0 evidence=%q\n",
+			runID, company.Slug, probe.Answer.Evidence)
+		return 0
+	}
+
 	// 2. Fetch: honor the listings origin's robots.txt too, then render and extract.
 	listingsPolicy, err := robots.Fetch(ctx, httpClient, probe.Answer.ListingsURL, cfg.UserAgent)
 	if err != nil {
