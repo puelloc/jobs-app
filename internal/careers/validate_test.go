@@ -261,6 +261,70 @@ func TestValidationGateRejectsBotChallengeServedAs200(t *testing.T) {
 	}
 }
 
+// Cloudflare's challenge wording and markup change over time, and the original four markers were
+// only the spellings seen on the first probe. The variants below are block pages served with HTTP
+// 200; "Enable JavaScript and cookies" is the live wording, which drops the "to continue" the old
+// marker required, and cf_chl_opt is the current challenge-platform script marker.
+func TestValidationGateRejectsBotChallengeVariants(t *testing.T) {
+	cases := []struct{ name, body string }{
+		{"cloudflare challenge platform",
+			`<html><head><title>Just a moment...</title></head><body><script>window._cf_chl_opt={cvId:"3",cRay:"abc"};</script></body></html>`},
+		{"cf browser verification",
+			`<html><head><title>example.com</title></head><body><div id="cf-browser-verification">Please wait.</div></body></html>`},
+		{"enable javascript and cookies without the continuation",
+			`<html><head><title>Attention Required</title></head><body>Enable JavaScript and cookies to access this site.</body></html>`},
+		{"verifying you are human",
+			`<html><head><title>example.com</title></head><body><h1>Verifying you are human</h1><p>This may take a few seconds.</p></body></html>`},
+		{"checking if the site connection is secure",
+			`<html><head><title>example.com</title></head><body><p>Checking if the site connection is secure</p></body></html>`},
+		{"incapsula block page",
+			`<html><head><title>Request unsuccessful</title></head><body>Incapsula incident ID: 12345</body></html>`},
+		{"access denied wall",
+			`<html><head><title>Access Denied</title></head><body>You do not have permission to access this server.</body></html>`},
+		{"site temporarily unavailable",
+			`<html><head><title>Dow Inc. - Site Temporarily Unavailable</title></head><body>Please try again later.</body></html>`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Validate(
+				Candidate{URL: "https://example.com/careers", Kind: KindCareerSite, CompanyName: "Example", Source: "nav_anchor"},
+				htmlResponse("https://example.com/careers", tc.body),
+			)
+			if v.Accepted() {
+				t.Fatalf("accepted a bot-challenge page: %+v", v)
+			}
+			if v.Reason != OutcomeBotChallenge {
+				t.Errorf("reason = %q, want %q", v.Reason, OutcomeBotChallenge)
+			}
+		})
+	}
+}
+
+// Widening the markers must not turn ordinary careers pages into block pages. Both bodies are real
+// shapes: a Cloudflare-fronted site (whose markup contains the word "cloudflare" in a script src)
+// and an application form that loads reCAPTCHA. Neither is a challenge, and a bare "cloudflare" or
+// "captcha" marker would reject them.
+func TestValidationGateDoesNotMistakeCareersPagesForChallenges(t *testing.T) {
+	bodies := []string{
+		`<html><head><title>Careers | Example</title>` +
+			`<script src="https://static.cloudflareinsights.com/beacon.min.js"></script></head>` +
+			`<body><h1>Careers</h1><p>Search jobs at Example.</p>` +
+			`<p>We do not deny access to employment on any basis.</p></body></html>`,
+		`<html><head><title>Careers at Example</title>` +
+			`<script src="https://www.google.com/recaptcha/api.js"></script></head>` +
+			`<body><h1>Open positions</h1><form><div class="g-recaptcha"></div></form></body></html>`,
+	}
+	for i, body := range bodies {
+		v := Validate(
+			Candidate{URL: "https://example.com/careers", Kind: KindCareerSite, CompanyName: "Example", Source: "nav_anchor"},
+			htmlResponse("https://example.com/careers", body),
+		)
+		if !v.Accepted() {
+			t.Errorf("case %d: rejected a legitimate careers page: %+v", i, v)
+		}
+	}
+}
+
 func TestValidationGateRejectsParkedDomain(t *testing.T) {
 	body := `<html><head><title>Coming Soon</title></head><body>This domain is for sale.</body></html>`
 	v := Validate(Candidate{URL: "https://citibnqa.com/", Kind: KindWebsite},

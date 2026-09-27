@@ -50,7 +50,9 @@ const (
 
 	// --- content: an answer was received and it is not the page that was wanted ---
 
-	// OutcomeBotChallenge means a bot wall answered 200 with a challenge page.
+	// OutcomeBotChallenge means a bot wall answered with a challenge or block page instead of the
+	// site. It is a rejection, a fact about the site, not an unknown: the site answered, it just
+	// refused to serve the page.
 	OutcomeBotChallenge Reason = "bot_challenge"
 	// OutcomeParkedDomain means a parking page answered 200. Observed on a stale Wikidata URL.
 	OutcomeParkedDomain Reason = "parked_domain"

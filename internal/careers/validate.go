@@ -361,12 +361,43 @@ func isGenericTitle(title string) bool {
 	return false
 }
 
-// challengeMarkers appear on bot walls that answer 200 with a challenge page.
+// challengeMarkers appear on bot walls that answer 200 with a challenge or block page instead of the
+// site. They are matched as substrings of the document title and the front of the body.
+//
+// The wording drifts, so the list is spellings rather than a taxonomy. Two are deliberately broader
+// than the first probe's literal text: "enable javascript and cookies" dropped the trailing "to
+// continue" that the old marker required, and "attention required" dropped the "! | cloudflare"
+// suffix. The cf_chl_* markers are Cloudflare's current challenge-platform script, which a 200
+// challenge page carries even when its visible title has changed.
+//
+// Do not add bare "cloudflare" or "captcha": legitimate careers pages load a Cloudflare beacon or a
+// reCAPTCHA on their application form, and either marker would reject them. The markers below were
+// checked against the 584 stored careers URLs that answered 200, and only actual block pages matched.
 var challengeMarkers = []string{
+	// Cloudflare, across the "under attack" page, the older browser check, and the
+	// current managed-challenge script.
 	"just a moment",
 	"checking your browser",
-	"attention required! | cloudflare",
-	"enable javascript and cookies to continue",
+	"attention required",
+	"enable javascript and cookies",
+	"cf-browser-verification",
+	"cf_chl_opt",
+	"cf_chl_",
+	"verifying you are human",
+	"verify you are human",
+	"checking if the site connection is secure",
+	"needs to review the security of your connection",
+	"ddos protection by cloudflare",
+	// Imperva/Incapsula answers 200 with a body that is only an authenticated iframe.
+	// Six stored careers URLs were this page rather than the site.
+	"incapsula incident id",
+	"request unsuccessful. incapsula",
+	// Other walls observed on stored careers URLs that answered a plain client with a
+	// block page: Akamai's "Access Denied", ZoomInfo's longer form, and a host error page.
+	"access denied",
+	"access to this page has been denied",
+	"site temporarily unavailable",
+	"unusual traffic",
 }
 
 // parkedMarkers appear on domain-parking pages, which answer 200 while containing nothing.
