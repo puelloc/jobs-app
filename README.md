@@ -50,6 +50,36 @@ export GOCACHE=$PWD/.gocache GOPATH=$PWD/.gopath
 go build ./... && go test ./...
 ```
 
+## Deploy to the NAS (Docker)
+
+The whole app runs in one image (`Dockerfile`): the Go binaries plus the Python browser-use worker
+and its pinned Chromium. `server` is the long-running service; `classify`, `scrape`, and `batch` run
+as one-off jobs against the same `./data` volume.
+
+```
+./scripts/deploy.sh          # git pull + rebuild + rolling restart + verify
+```
+
+That script handles the `PUID`/`PGID` ownership of `./data` (SQLite must be writable by the
+container user), rebuilds with `docker compose up -d --build --remove-orphans`, and reports any
+restart-loop or API failure. The API is exposed on host port `8094`.
+
+Run the scrape jobs from the repo root:
+
+```
+docker compose run --rm app classify -commit                     # once, before any scrape
+docker compose run --rm app scrape -slug twilio -vendor eightfold  # one company
+docker compose run --rm app batch                                # full sweep, one company at a time
+```
+
+`batch` is the concurrency boundary: it never runs two scrapes at once, so SQLite sees one writer and
+the model host sees one browser agent. Before a full sweep, run `classify -commit` so every company
+has a recorded vendor (the scrape trigger refuses unclassified companies). The `./data` volume carries
+`jobs.db` and the per-run agent traces across recreations.
+
+The web UI (`web/`) is dev-only until its workstream switches it to a production adapter; it is not
+yet a compose service.
+
 ## Known issues
 
 - **Mojibake in scraped text.** RemoteOK's payload carries UTF-8 bytes that read as Latin-1 for common

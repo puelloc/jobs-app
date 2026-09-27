@@ -152,7 +152,7 @@ run=<scrape_runs.id> source=remoteok status=ok http=200 bytes=<n> path=<raw file
 - No pagination. One request, one response, one run.
 - No concurrency: one goroutine, one request at a time, one DB connection, jobs processed sequentially.
 - No retries beyond a single bounded 429 retry. No exponential backoff, no jitter, no circuit breaker.
-- No in-process scheduler, cron, systemd unit, or container config - how often this runs is an operator decision outside the binary.
+- No in-process scheduler, cron, or systemd unit - how often this runs is an operator decision outside the binary. (A container config now exists at the repo root for the server and browser-use worker; this v1 note predates it.)
 - No cross-source deduplication or merge. The same real-world job seen on two sources stays two rows.
 - No US / remote classification logic. `is_us`, `country`, and `location_text` are populated only from what the payload states; no inference from text.
 - No HTML cleaning, markdown stripping, or description normalization. Stored as received.

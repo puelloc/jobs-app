@@ -9,10 +9,11 @@ design: `docs/sp1500-plan.md`, sections 7.2 and 7.5.
 
 ## Why a subprocess and not a library
 
-browser-use is Python, the rest of the project is cgo-free Go that cross-compiles to the NAS. The
-plan defers browser-use for the same reason: it is nondeterministic, so it cannot sit on the
-primary tested path — only the seam where its output is consumed can be pinned by tests. That seam
-is this contract.
+browser-use is Python, the rest of the project is cgo-free Go. The two halves ship together in one
+Docker image (`Dockerfile` at the repo root): a Go build stage, then a Python runtime with the
+pinned Playwright and its Chromium. The plan defers browser-use for the same reason: it is
+nondeterministic, so it cannot sit on the primary tested path — only the seam where its output is
+consumed can be pinned by tests. That seam is this contract.
 
 ## Invocation
 
