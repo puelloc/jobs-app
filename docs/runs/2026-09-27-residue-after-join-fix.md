@@ -96,8 +96,9 @@ loaded as a careers page, 54 provably wrong, and 49 unverifiable — a similar e
 
 The next honest step is a validation sweep over the newly stored URLs, not another resolution pass.
 A browser-validation sweep (`sp1500 validate`) is being run separately against a copy of the
-database; its verdicts were computed against URLs resolved by the *broken* tier 1, so it should be
-re-run after this result to include the recovered companies.
+database. Its verdicts on the 632 pre-existing URLs remain valid - this run only *adds* rows and
+rewrites none of those - but it holds no verdict for the 202 companies recovered here, so its
+classification of the residue does not yet include them.
 
 ## Decisions taken on 2026-09-27 (recorded here pending a plan update)
 
@@ -116,6 +117,7 @@ recorded here so they are not lost in the meantime.
    now dominated by 242 rows with no Wikipedia article at all - a set a search engine cannot help
    with either, because there is nothing to search *for*. Revisit only if the 379
    homepage-without-a-careers-page set turns out to be worth attacking.
-3. **Re-run the browser-validation sweep after this result** before relying on its §8.1 browser-use
-   justification, because its current verdicts were computed against URLs resolved by the broken
-   tier 1.
+3. **Validate the 202 recovered URLs before extending the browser-use argument to them.** The
+   existing sweep's verdicts on the 632 pre-existing URLs stand unchanged; what it cannot speak to is
+   the companies this run recovered, so any §8.1 browser-use conclusion that rests on the size of the
+   residue needs revisiting once they are classified.
