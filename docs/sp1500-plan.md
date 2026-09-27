@@ -4,11 +4,11 @@
 
 | Field | Value |
 | --- | --- |
-| Current milestone | **M1 — ready to implement, unblocked** |
-| Next action | Commit 1: migration-runner FK-off support + its 5 tests (see "Commit order") |
-| Blocking issues | none for M1 or M2 |
+| Current milestone | **M1 and M2a complete; the full 1,498-company run is done** (see §12) |
+| Next action | Fix the tier-1 Wikipedia-join failure that loses ~310 companies their homepage (§12) |
+| Blocking issues | none |
 | Open questions | 3, all non-blocking (see "Unresolved") |
-| Last corrected | row counts `503 / 399 / 600 = **1,502**` |
+| Last corrected | resolution figure: **529 confirmed careers pages (35.3%)**, not the 42.2% stored-value share (§9) |
 
 This document is the single source of truth for the S&P 1500 workstream. It is self-contained:
 it embeds the measurements, the decisions, and the traps, so a new session can continue without
@@ -1027,12 +1027,23 @@ None block M1 or M2a.
 
 ## 12. Pick up here
 
-1. **Implement M1 commit 1** — migration-runner FK-off support + the five runner tests. Nothing else
-   is safe to build until this lands, because `003` cannot apply without it.
-2. Then `004` + `006`, then the parser + fixtures + assertions (`503 / 399 / 600 / 1,502`).
-3. Before starting M2, run §8.1 and §8.2 — they determine how much of the corpus is unreachable by
-   deterministic means, and therefore whether M3 is justified at all.
-4. Run §8.3 before committing to the browser-use config.
+State as of 2026-09-27: M1 and M2a are implemented and have run end to end. The full 1,498-company
+resolution run is recorded in `docs/runs/2026-09-26-full.md`, including the corrected resolution
+figure: **529 confirmed careers pages (35.3%), 54 provably wrong (3.6%), 49 unverifiable (3.3%)**.
+The 42.2% the report first quoted was the share of companies with a *stored* value, not a working
+one.
+
+1. **Fix the tier-1 join failure first.** 562 companies (37.5%) have no homepage, and the count of
+   `wikipedia_infobox` attempts exactly equals the count of non-NULL websites, so an article that
+   resolves by hand is producing no attempt at all. Of the 562, roughly 310 have a Wikipedia article
+   that `action=query` resolves fine (sampled: `advanced-micro-devices` / "AMD",
+   `advance-auto-parts-inc`, `a10-networks-inc`), so the 50-title batch is losing titles between the
+   request and the result map. **This is the largest single lever on the resolution rate and costs no
+   network round trips to diagnose.** It is a join failure, not a block, so no browser can help.
+2. **Then re-run and re-measure** before any M2b/M3 decision: repairing tier 1 moves the blocked
+   share that §8.1's browser-use call rests on.
+3. M2b (HTML-only ATS tenant extraction) remains the next feature tier; M3 (browser-use) stays
+   deferred by the §8.1 call in the run report.
 
 **Do not re-open §5 without new evidence.** If a measurement contradicts a decision, update this
 document's corrections ledger (§9) rather than silently changing course.
