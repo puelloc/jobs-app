@@ -20,7 +20,8 @@ SvelteKit dashboard over the Go API. Six screens:
   description (rendered as escaped plain text, never as HTML) and the listing/application/discovery
   URLs.
 - **Logs** at `/logs` — the tail of the Go API server's own log, where self-tracked jobs stream their
-  per-company progress.
+  per-company progress. Shown **newest-first and paginated** (200 lines per page, "Show older" to page
+  back).
 
 The write paths are the trigger buttons (`POST /api/pipeline/{name}`), the per-company scrape
 (`POST /api/companies/{id}/scrape`), and run control (`POST /api/runs/{id}/stop|pause|resume`).
