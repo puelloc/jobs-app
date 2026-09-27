@@ -249,9 +249,10 @@ def main() -> int:
 
     exe = chromium_path()  # before asyncio.run: sync Playwright cannot run inside the loop
 
+    # The header goes to stderr so stdout stays one JSON object, matching the worker contract.
     print(f"url={args.url}\ncompany={args.company}\nmodel={args.model}\nhost={args.host}\n"
           f"max_steps={args.max_steps} vision={args.vision} guard={not args.no_guard}",
-          flush=True)
+          file=sys.stderr, flush=True)
 
     result = asyncio.run(run_one(
         args.url, args.company, args.host, args.model, args.max_steps,

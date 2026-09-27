@@ -101,6 +101,28 @@ func CompanyIDBySlug(ctx context.Context, q Querier, slug string) (int64, error)
 	return id, nil
 }
 
+// ScrapeCompany is the subset of a companies row a listings scrape needs.
+type ScrapeCompany struct {
+	ID            int64
+	Slug          string
+	Name          string
+	CareerSiteURL string
+}
+
+// ScrapeCompanyBySlug returns the scrape inputs for a slug, or sql.ErrNoRows when there is no such
+// row. A NULL career_site_url comes back as "" so the caller can report "no stored URL" rather than
+// mistaking it for a missing company.
+func ScrapeCompanyBySlug(ctx context.Context, q Querier, slug string) (ScrapeCompany, error) {
+	var c ScrapeCompany
+	err := q.QueryRowContext(ctx,
+		`SELECT id, slug, name, COALESCE(career_site_url, '') FROM companies WHERE slug = ?`, slug).
+		Scan(&c.ID, &c.Slug, &c.Name, &c.CareerSiteURL)
+	if err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
 // PlatformIDByName returns the platforms id for a vendor name, or sql.ErrNoRows when unknown.
 func PlatformIDByName(ctx context.Context, q Querier, name string) (int64, error) {
 	var id int64
