@@ -1,13 +1,20 @@
 # Scraping listings from the resolved careers sites — plan and handoff
 
+> **Status: implemented.** This workstream is now built and runs end to end. The pipeline is:
+> `sp1500` (index companies) → `sp1500 resolve` (careers URLs) → `sp1500 validate` (browser-check,
+> optional) → `classify -commit` (ATS vendor) → `batch` (listings sweep, one company at a time). It
+> is driven from the web UI's "Trigger a job" buttons and monitored via the runs dashboard, the run
+> detail page, and the Logs page. See `README.md` (Deploy) and `web/README.md` for the current shape;
+> this document is the plan it was built from.
+
 The careers-site workstream (resolve a company to a careers URL, then validate that URL) is finished.
 This document is the starting point for the next one: **fetch actual job listings from those careers
 sites into `job_listings`**.
 
 | Field | Value |
 | --- | --- |
-| Current state | Career-site resolution **and** browser validation complete; see `docs/sp1500-plan.md` §3 and `docs/runs/2026-09-27-browser-validation.md` |
-| Next action | Pick the first ATS slice (§5) and write the scraper against the existing `job_listings` contract |
+| Current state | Implemented: a browser-use agent finds the filtered listings URL, a render pass extracts postings, and `cmd/scrape`/`cmd/batch` upsert the US-only ones |
+| Next action | Deploy to the NAS and run the sweep (classify first) |
 | Blocking issues | none |
 | **Canonical database** | **`jobs.db` in the repo root** — one file, no per-source copies |
 

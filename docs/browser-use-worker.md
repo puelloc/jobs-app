@@ -109,7 +109,7 @@ Failure — still exit 0:
 | --- | --- |
 | `BROWSER_USE_CONFIG_DIR` | browser-use creates this directory on import. Without it set to a writable path it tries `~/.config/browseruse` and fails under a sandboxed run. The worker sets its own default to `<repo>/.browseruse`. |
 | `BROWSER_USE_CHROMIUM_PATH` | Optional override for the browser binary. The worker otherwise resolves Playwright's own Chromium, which is what keeps the pinned Playwright version authoritative. browser-use does not use Playwright's launcher; it spawns the browser over CDP and, when its own scan for a binary misses, shells out to `uvx playwright install chromium` and then fails to find the browser anyway. Passing the path skips that. |
-| `BROWSER_USE_BROWSER_ARGS` | Optional whitespace-separated Chromium flags for the agent's browser, e.g. `--no-sandbox --disable-gpu`. Unset means Chromium keeps its own sandbox, which is the default a security boundary deserves. |
+| `BROWSER_USE_BROWSER_ARGS` | Optional whitespace-separated Chromium flags applied to the browser in **render and agent mode alike**, e.g. `--no-sandbox --disable-gpu`. The render path (Playwright's launcher) and the agent path (browser-use's CDP spawn) both read it, and `worker/listings_fetch.py` reads it too. Unset means Chromium keeps its own sandbox, which is the default a security boundary deserves. The Docker image sets it to `--no-sandbox --disable-gpu --disable-dev-shm-usage`. |
 | `PLAYWRIGHT_BROWSERS_PATH` | Optional. Defaults to the shared ms-playwright cache, which the pinned Playwright version already matches. |
 
 ### The sandbox fallback
@@ -121,7 +121,9 @@ attempt with `--no-sandbox --disable-gpu`. It does not retry for any other error
 the browser sandbox by default, and the retry is written to stderr so it is never silent. Setting
 `BROWSER_USE_BROWSER_ARGS` makes the choice deliberate instead and disables the fallback.
 
-`render` mode is unaffected: Playwright's own launcher works without the flag.
+`render` mode reads the same `BROWSER_USE_BROWSER_ARGS` and passes them to Playwright's launcher, so
+an operator sets one variable to make the deliberate choice for both paths. (In a container, Chromium
+cannot use its own sandbox at all, so the image sets the flag rather than relying on the retry.)
 
 Pinned in `worker/requirements.txt`: `playwright==1.58.0`, `browser-use==0.13.10`. The Playwright pin
 is load-bearing — 1.58.0 is the version whose Chromium revision (1208) is already on disk, so the

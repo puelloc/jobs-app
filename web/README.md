@@ -1,25 +1,36 @@
 # jobs-web
 
-SvelteKit dashboard over the Go API. Five screens:
+SvelteKit dashboard over the Go API. Six screens:
 
 - **Runs** at `/` — the status and history of every `scrape_runs` row: running runs first, then
-  finished ones, with a count of active runs. It is the only screen that polls (every 5s), because a
-  run is in flight and its status is the thing changing. Each run links to its detail/trace page.
-- **Run detail** at `/runs/[id]` — one run's status and counters plus its live agent trace (the
-  `step`/`done` events the browser-use worker writes). Polls every 3s while a run is in flight.
+  finished ones. This is the control center: the **Trigger a job** buttons (bootstrap / resolve /
+  validate / classify / sweep / RemoteOK) launch the pipeline, and each running run gets
+  **pause / resume / stop** and a **watch →** link.
+- **Run detail** at `/runs/[id]` — one run's status and counters, its output, and (for
+  `career_listings` runs) the live agent trace (the `step`/`done` events the browser-use worker
+  writes). For self-tracked jobs (resolve/validate/scraper/bootstrap) the output shown is the shared
+  server-log tail, since those jobs tee into it rather than a per-run file.
 - **Companies** at `/companies` and `/companies/[id]` — a directory of companies and, per company,
   the careers-site resolution trail behind it. The directory shows each company's `career_site_url`
   (linked), its validation verdict (`confirmed`/`wrong`/`unverifiable`), and its attempt count, with
-  filters for `resolution`, `index`, and `search`. The detail page shows the company's facts and every
-  `url_resolution_attempts` row — accepted and rejected alike — plus the **Scrape** button that
-  triggers one company's listings scrape.
+  filters for `resolution`, `index`, and `search`. The detail page shows the company's facts, every
+  `url_resolution_attempts` row (accepted and rejected alike), and the **Scrape** button that
+  triggers one company's listings scrape (disabled until the company is classified).
 - **Jobs** at `/jobs` and `/jobs/[id]` — the scraped job listings, with a per-job page showing the
   description (rendered as escaped plain text, never as HTML) and the listing/application/discovery
   URLs.
+- **Logs** at `/logs` — the tail of the Go API server's own log, where self-tracked jobs stream their
+  per-company progress.
 
-The only write path is the Scrape button (`POST /api/companies/{id}/scrape`); there is no auth. No
-client-side fetching on first load: every page is server-rendered, and only then does the browser
-fetch more (the runs and run-detail polls, and the companies/jobs "load more" buttons).
+The write paths are the trigger buttons (`POST /api/pipeline/{name}`), the per-company scrape
+(`POST /api/companies/{id}/scrape`), and run control (`POST /api/runs/{id}/stop|pause|resume`).
+There is no auth. Every page is server-rendered first, then kept live by polling.
+
+## Refresh frequency
+
+The top bar has a **Refresh** dropdown (1s / 2s / 3s / 5s / 10s / 30s). It drives every live poll
+(runs dashboard, run detail, server log) and is persisted to `localStorage`, so it survives reloads
+and redeploys. Changing it re-arms every timer immediately.
 
 ## Prerequisites
 
@@ -47,63 +58,59 @@ Then open http://localhost:5173/.
 (`web/build/index.js`) — this is what the `ui` Docker service runs. `npm run preview` serves that
 build locally.
 
-
 ## How it talks to the API
 
 - Every request goes to a same-origin `/api/*` path.
-- `vite.config.js` proxies `/api` to `http://127.0.0.1:8080` in dev, so no CORS configuration is
-  needed anywhere and no component hardcodes the Go host.
-- `src/lib/api.js` is the only module that fetches. It exports `getRuns`, `getCompanies`,
-  `getCompany`, `getJobs`, and `getJob`.
+- In dev, `vite.config.js` proxies `/api` to `http://127.0.0.1:8080`. In production there is no Vite:
+  `src/routes/api/[...path]/+server.js` proxies `/api/*` to the Go API (`JOBS_API`, default
+  `http://127.0.0.1:8080`), so no CORS configuration is needed anywhere and no component knows the Go
+  host.
+- `src/lib/api.js` is the only module that fetches. During SSR it uses SvelteKit's `event.fetch` with
+  a relative path (routed through the proxy); in the browser it uses the global `fetch` (same-origin).
 - The first paint is server-rendered: each `+page.js` calls its `get*` function during SSR, so the
-  initial HTML already contains the data. `+page.svelte` then keeps it live where it matters:
-  `/` re-runs its load on a 5-second interval via `invalidate('data:runs')`, so a run in flight moves
-  from "running" to its result without a manual refresh; `/jobs` and `/companies` append further
-  pages with the "load more" button (their data changes slowly, so they do not poll).
-- During SSR the request is addressed to the dev server's own origin (`url.origin`) instead of a bare
-  relative path, because SvelteKit's own `event.fetch` resolves same-origin requests through this
-  app's router, which has no `/api` route. Addressing the origin keeps one code path for both the
-  server render and the browser.
+  initial HTML already contains the data. `+page.svelte` then keeps it live via `$lib/poll.js`, which
+  re-runs the load on the chosen interval through `invalidate(...)`.
 
 ## The API the screens use
 
 | Endpoint | Used by the UI |
 | --- | --- |
 | `GET /api/runs` | **yes** — the runs dashboard (`/`) |
+| `GET /api/runs/{id}` | **yes** — a run's detail (`/runs/{id}`) |
+| `POST /api/runs/{id}/stop` | **yes** — the stop button |
+| `POST /api/runs/{id}/pause` / `resume` | **yes** — the pause/resume button |
+| `POST /api/pipeline/{name}` | **yes** — the trigger buttons (`sp1500`, `resolve`, `validate`, `classify`, `batch`, `scraper`) |
+| `GET /api/pipeline/{id}/log` | **yes** — a run's per-run output |
+| `GET /api/logs/server` | **yes** — the Logs page, and self-tracked runs' output |
+| `GET /api/traces/{id}` | **yes** — a `career_listings` run's live agent trace |
+| `POST /api/companies/{id}/scrape` | **yes** — a company's Scrape button |
 | `GET /api/companies` | **yes** — the company directory (`/companies`) |
 | `GET /api/companies/{id}` | **yes** — a company + its resolution trail (`/companies/{id}`) |
-| `GET /api/companies/churn` | no |
+| `GET /api/companies/churn` | no — no screen yet |
 | `GET /api/jobs` | **yes** — the jobs list (`/jobs`) |
 | `GET /api/jobs/{id}` | **yes** — a job's detail (`/jobs/{id}`) |
-
-`/api/companies/churn` exists for the data model (accepted careers URLs that moved between runs) and
-has no screen yet; nothing in this app calls it.
 
 ## Layout
 
 ```
 src/
+  hooks.server.js    logs server errors so `docker compose logs ui` shows them
   app.html
   lib/
-    api.js            fetch wrapper; throws { status, code, message }; exports getRuns, getCompanies, getCompany, getJobs, getJob
-    format.js         pure formatting helpers (formatUtc, formatRunStatus, formatDuration, formatVerdict, formatJobStatus, formatValidationStatus, formatSalary, formatLocation, humanize, NOT_STATED, …)
+    api.js           the only fetch module; throws { status, code, message }
+    format.js        pure formatting helpers
+    refresh.js       the refresh-frequency store (localStorage-backed)
+    poll.js          poll(fn) — re-arms an interval when the refresh store changes
   routes/
-    +layout.svelte    the shell: top bar, brand, nav (Runs / Companies / Jobs)
-    +page.svelte      runs dashboard
-    +page.js          server-side load of GET /api/runs?limit=100&offset=0, plus the poll
-    companies/
-      +page.svelte    company directory
-      +page.js        load of GET /api/companies (filters ride the URL query string)
-      [id]/
-        +page.svelte  one company: facts plus the whole resolution trail
-        +page.js      load of GET /api/companies/{id}
-    jobs/
-      +page.svelte    jobs list
-      +page.js        load of GET /api/jobs?limit=25&offset=0
-      [id]/
-        +page.svelte  one job: facts, dates, links, description
-        +page.js      load of GET /api/jobs/{id}
-    +error.svelte     error route
+    +layout.svelte   the shell: top bar, nav (Runs / Companies / Jobs / Logs), Refresh dropdown
+    +page.svelte     runs dashboard: trigger buttons + running/history runs with pause/resume/stop
+    +page.js         server-side load of GET /api/runs
+    runs/[id]/       run detail: status, output, agent trace (career_listings)
+    companies/       directory; [id]/ = one company + trail + Scrape button
+    jobs/            listings list; [id]/ = one listing
+    logs/            the server log, live
+    api/[...path]/+server.js   the production /api proxy to the Go API
+    +error.svelte    error route
 ```
 
 ## Notes
@@ -111,12 +118,15 @@ src/
 - Svelte 5 runes mode is forced on in `svelte.config.js` (`compilerOptions.runes: true`), so legacy
   syntax is a compile error.
 - A run's `status` is the whole point of the screen: `running` means the row was written before the
-  network was touched and has not been finished yet, so a run stuck in `running` is a crash or a kill
-  rather than a quiet success.
+  network was touched and has not been finished yet. A run stuck in `running` is a crash or a kill —
+  except that on server start any stale `running` row is reconciled to `error` + "interrupted by
+  restart".
 - "null means not known": nullable columns arrive as JSON `null` (they are pointers on the wire). In
   lists they are omitted; on detail pages they render as "Not stated". A null
   `career_site_url_verdict` is a real state of its own — no validation has judged the current URL —
   and renders as "Not validated" rather than "Not stated".
+- A run's counters (`items_found`/`items_inserted`/…) stay 0 while a job runs and jump to the final
+  tally only when it finishes; live progress comes from the log/trace, not those counters.
 - `docs/ui-design.md` is the **v1 design record** for the jobs list/detail viewer and the company
-  directory. Its screens are now built; its "API ↔ UI boundaries" and "null means not known" rules
-  are the live guidance the current screens follow.
+  directory. Its screens are built; its "API ↔ UI boundaries" and "null means not known" rules are the
+  live guidance the current screens follow.

@@ -2,9 +2,12 @@
 
 > **Status: v1 design record, now implemented.** The jobs list/detail screens and the company
 > directory that this document designs **are built** in `web/` (see `web/README.md` for the current
-> app). The API contract below is a v1 snapshot; the live API has since also gained
-> `GET /api/companies`, `/api/companies/{id}`, `/api/companies/churn` and `/api/runs`, and the company
-> list item now carries `career_site_url_verdict`.
+> app). The API contract below is a v1 snapshot; the live API has since also gained the company
+> directory (`GET /api/companies`, `/api/companies/{id}`, `/api/companies/churn`, plus `vendor` on the
+> detail), runs (`GET /api/runs`, `GET /api/runs/{id}`), and the job-control write paths
+> (`POST /api/companies/{id}/scrape`, `POST /api/pipeline/{name}`,
+> `POST /api/runs/{id}/stop|pause|resume`), plus `GET /api/traces/{id}`, `GET /api/logs/server` and
+> `GET /api/pipeline/{id}/log`.
 >
 > What is **still live guidance**, and what the current screens follow:
 >
