@@ -39,6 +39,8 @@ services:
       SERVER_ADDR: ":8080"
       DB_PATH: /data/jobs.db
       DATA_DIR: /data
+      # classify requires this flag to run its browser-use render pass.
+      ENABLE_BROWSER_USE: "true"
       # The model host. LAN DNS resolves ai.siggy-lab.org to the NAS's Ollama.
       OLLAMA_HOST: ${OLLAMA_HOST:-https://ai.siggy-lab.org}
       # The server spawns these to serve the per-company scrape trigger.

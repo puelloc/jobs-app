@@ -1,6 +1,7 @@
 <script>
-	import { invalidate } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
 	import { onMount } from 'svelte';
+	import { postJob } from '$lib/api.js';
 	import { formatDuration, formatRunStatus, formatUtc } from '$lib/format.js';
 
 	let { data } = $props();
@@ -11,6 +12,28 @@
 	const total = $derived(data.total ?? 0);
 	const running = $derived(runs.filter((r) => r.status === 'running'));
 	const history = $derived(runs.filter((r) => r.status !== 'running'));
+
+	const jobs = [
+		{ name: 'sp1500', label: 'Bootstrap companies' },
+		{ name: 'classify', label: 'Classify vendors' },
+		{ name: 'batch', label: 'Full scrape sweep' },
+		{ name: 'scraper', label: 'Refresh RemoteOK' }
+	];
+
+	let pending = $state('');
+	let triggerError = $state('');
+
+	async function trigger(name) {
+		pending = name;
+		triggerError = '';
+		try {
+			const res = await postJob(name);
+			await goto(`/runs/${res.run_id}`);
+		} catch (failure) {
+			triggerError = failure?.message ?? `Could not start ${name}`;
+			pending = '';
+		}
+	}
 
 	// Poll the load function so in-flight runs and new finishes show up without
 	// a manual refresh. invalidate() re-runs load on the client only.
@@ -30,6 +53,24 @@
 		<h1>Runs</h1>
 		<p class="sub">Scraper and validation job runs · {total} total · refreshes every 5s</p>
 	</div>
+
+	<section class="section">
+		<h2>Trigger a job</h2>
+		<div class="trigger-row">
+			{#each jobs as job (job.name)}
+				<button
+					class="trigger"
+					disabled={pending !== ''}
+					onclick={() => trigger(job.name)}
+				>
+					{pending === job.name ? 'Starting…' : job.label}
+				</button>
+			{/each}
+		</div>
+		{#if triggerError}
+			<p class="error">{triggerError}</p>
+		{/if}
+	</section>
 
 	<section class="section">
 		<h2>Running</h2>
@@ -173,6 +214,36 @@
 		color: #6b7178;
 		font-size: 0.82rem;
 		white-space: nowrap;
+	}
+
+	.trigger-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+
+	.trigger {
+		padding: 0.4rem 0.8rem;
+		border: 1px solid #1a7f37;
+		border-radius: 6px;
+		background: #1a7f37;
+		color: #ffffff;
+		font-size: 0.85rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.trigger:disabled {
+		background: #e4e7ec;
+		border-color: #e4e7ec;
+		color: #8a9099;
+		cursor: not-allowed;
+	}
+
+	.error {
+		margin: 0.6rem 0 0;
+		font-size: 0.85rem;
+		color: #c62828;
 	}
 
 	.badge {

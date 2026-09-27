@@ -1,9 +1,9 @@
 import { error } from '@sveltejs/kit';
-import { getRun, getTrace } from '$lib/api.js';
+import { getJobLog, getRun, getTrace } from '$lib/api.js';
 
-// Server-rendered: the first HTML response carries the run's status and any
-// trace written so far. The page then re-runs this load on an interval to pick
-// up live agent steps while the run is in flight.
+// Server-rendered: the first HTML response carries the run's status, any agent
+// trace, and any job log written so far. The page then re-runs this load on an
+// interval to pick up live steps while the run is in flight.
 /** @type {import('./$types').PageLoad} */
 export async function load({ params, fetch, depends }) {
 	depends('data:run');
@@ -16,12 +16,14 @@ export async function load({ params, fetch, depends }) {
 	}
 
 	let trace = { present: false, events: [] };
+	let log = { present: false, log: '' };
 	try {
 		trace = await getTrace(params.id, { fetch });
+		log = await getJobLog(params.id, { fetch });
 	} catch {
-		// A trace read that fails is not a page failure: the run still renders,
-		// and the poll retries once the browser takes over.
+		// A trace/log read that fails is not a page failure: the run still
+		// renders, and the poll retries once the browser takes over.
 	}
 
-	return { run, trace };
+	return { run, trace, log };
 }

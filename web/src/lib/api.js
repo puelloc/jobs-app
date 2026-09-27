@@ -164,3 +164,24 @@ export async function getRun(id, options = {}) {
 export async function getTrace(id, options = {}) {
 	return getJSON(`/api/traces/${id}`, options);
 }
+
+/**
+ * Trigger one pipeline job (sp1500, classify, batch, scraper). Rejects with 409
+ * when another job is already running.
+ * @param {string} name
+ * @returns {Promise<{ run_id: number }>}
+ */
+export async function postJob(name) {
+	return postJSON(`/api/pipeline/${name}`);
+}
+
+/**
+ * A pipeline job's stdout log, for monitoring a non-agent job the way an agent
+ * run is watched through its trace.
+ * @param {number|string} id
+ * @param {{ fetch?: typeof fetch }} [options]
+ * @returns {Promise<{ id: string, present: boolean, log: string }>}
+ */
+export async function getJobLog(id, options = {}) {
+	return getJSON(`/api/pipeline/${id}/log`, options);
+}

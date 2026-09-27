@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os/exec"
 	"strconv"
-	"sync"
 
 	"jobsapp/internal/store"
 )
@@ -23,34 +22,8 @@ type ScrapeResponse struct {
 	RunID int64 `json:"run_id"`
 }
 
-// scrapeGate serializes scrapes within one server process: only one listing scrape runs at a time.
-// The full sweep goes through cmd/batch, which is sequential by construction; this is the same
-// boundary for the per-company trigger, so clicking "scrape" on several companies cannot fan out
-// into concurrent browser agents (which would contend on SQLite's single writer and the shared
-// model host). A process that is already in flight makes a new trigger a 409 conflict.
-type scrapeGate struct {
-	mu      sync.Mutex
-	running bool
-}
-
-func (g *scrapeGate) tryAcquire() bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.running {
-		return false
-	}
-	g.running = true
-	return true
-}
-
-func (g *scrapeGate) release() {
-	g.mu.Lock()
-	g.running = false
-	g.mu.Unlock()
-}
-
 // handleScrapeCompany serves POST /api/companies/{id}/scrape.
-func handleScrapeCompany(db *sql.DB, scrapeCmd []string, gate *scrapeGate) http.HandlerFunc {
+func handleScrapeCompany(db *sql.DB, scrapeCmd []string, gate *jobGate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if len(scrapeCmd) == 0 {
 			writeError(w, http.StatusServiceUnavailable, codeInternal, "scrape command is not configured (SCRAPE_COMMAND)")
@@ -80,7 +53,7 @@ func handleScrapeCompany(db *sql.DB, scrapeCmd []string, gate *scrapeGate) http.
 		}
 
 		if !gate.tryAcquire() {
-			writeError(w, http.StatusConflict, codeConflict, "a scrape is already running; try again when it finishes")
+			writeError(w, http.StatusConflict, codeConflict, "a job is already running; try again when it finishes")
 			return
 		}
 

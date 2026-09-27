@@ -13,6 +13,8 @@
 	const run = $derived(data.run);
 	const events = $derived(data.trace?.events ?? []);
 	const present = $derived(data.trace?.present ?? false);
+	const log = $derived(data.log?.log ?? '');
+	const logPresent = $derived(data.log?.present ?? false);
 	const isAgentRun = $derived(run.platform === 'career_listings');
 
 	// Poll the load function so live agent steps and a status change show up
@@ -77,45 +79,52 @@
 	</section>
 
 	<section class="section">
-		<h2>Agent trace</h2>
-		{#if !isAgentRun}
-			<p class="quiet">This run does not drive a browser agent, so there is no trace to show.</p>
-		{:else if !present && events.length === 0}
-			<p class="quiet">No trace yet — the agent has not written its first step.</p>
-		{:else}
-			<ol class="trace">
-				{#each events as ev, i (i)}
-					{#if ev.event === 'step'}
-						<li class="step">
-							<div class="step-head">
-								<span class="step-num">Step {ev.step}</span>
-								{#if ev.url}
-									<a href={ev.url} target="_blank" rel="noreferrer">{ev.url}</a>
-								{/if}
-							</div>
-							{#if ev.next_goal}
-								<div class="field"><span class="label">next goal</span><p>{ev.next_goal}</p></div>
-							{/if}
-							{#if ev.thinking}
-								<div class="field"><span class="label">thinking</span><p>{ev.thinking}</p></div>
-							{/if}
-							{#if ev.actions?.length}
-								<div class="actions">
-									{#each ev.actions as action}<code>{formatTraceAction(action)}</code>{/each}
+		{#if isAgentRun}
+			<h2>Agent trace</h2>
+			{#if !present && events.length === 0}
+				<p class="quiet">No trace yet — the agent has not written its first step.</p>
+			{:else}
+				<ol class="trace">
+					{#each events as ev, i (i)}
+						{#if ev.event === 'step'}
+							<li class="step">
+								<div class="step-head">
+									<span class="step-num">Step {ev.step}</span>
+									{#if ev.url}
+										<a href={ev.url} target="_blank" rel="noreferrer">{ev.url}</a>
+									{/if}
 								</div>
-							{/if}
-						</li>
-					{:else if ev.event === 'done'}
-						<li class="done">
-							<span class="badge badge-{ev.success ? 'ok' : 'error'}">
-								{ev.success ? 'Done' : 'Failed'}
-							</span>
-							<span class="steps">{ev.steps} steps</span>
-							{#if ev.final_result}<p class="final">{ev.final_result}</p>{/if}
-						</li>
-					{/if}
-				{/each}
-			</ol>
+								{#if ev.next_goal}
+									<div class="field"><span class="label">next goal</span><p>{ev.next_goal}</p></div>
+								{/if}
+								{#if ev.thinking}
+									<div class="field"><span class="label">thinking</span><p>{ev.thinking}</p></div>
+								{/if}
+								{#if ev.actions?.length}
+									<div class="actions">
+										{#each ev.actions as action}<code>{formatTraceAction(action)}</code>{/each}
+									</div>
+								{/if}
+							</li>
+						{:else if ev.event === 'done'}
+							<li class="done">
+								<span class="badge badge-{ev.success ? 'ok' : 'error'}">
+									{ev.success ? 'Done' : 'Failed'}
+								</span>
+								<span class="steps">{ev.steps} steps</span>
+								{#if ev.final_result}<p class="final">{ev.final_result}</p>{/if}
+							</li>
+						{/if}
+					{/each}
+				</ol>
+			{/if}
+		{:else}
+			<h2>Output</h2>
+			{#if !logPresent || !log}
+				<p class="quiet">No output yet.</p>
+			{:else}
+				<pre class="log">{log}</pre>
+			{/if}
 		{/if}
 	</section>
 
@@ -291,6 +300,20 @@
 		white-space: pre-wrap;
 		word-break: break-word;
 		font-size: 0.88rem;
+	}
+
+	.log {
+		margin: 0;
+		padding: 0.7rem 0.9rem;
+		background: #ffffff;
+		border: 1px solid #e4e7ec;
+		border-radius: 8px;
+		white-space: pre-wrap;
+		word-break: break-word;
+		font-size: 0.8rem;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		max-height: 40rem;
+		overflow: auto;
 	}
 
 	.error {
