@@ -24,3 +24,12 @@
 # Ad-hoc browser profiles and scratch output from one-off checks (~1,000 vendored extension
 # files). Throwaway artifacts, not source.
 /career-check/
+
+# npm/npx caches created inside the repo (this sandbox cannot write ~/.npm)
+/.npm-cache/
+/.npm-logs/
+
+# Scratch output from one-off browser-use checks (regenerable, not source)
+/worker/probe_*.log
+/worker/model_compare_*.json
+/worker/listings_*_test.json
