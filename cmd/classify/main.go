@@ -3,7 +3,9 @@
 // classifier: the pure classification is careers.Fingerprint and the write is
 // store.SetCompanyApplicationPlatform, both unit-tested.
 //
-// Dry-run by default: it prints each company's vendor and writes nothing. Pass -commit to record.
+// For a first-party careers page that does not itself reveal the vendor, classify follows one hop -
+// the page's "open positions" link - and fingerprints that. Dry-run by default: it prints each
+// company's vendor and writes nothing. Pass -commit to record.
 package main
 
 import (
@@ -32,7 +34,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	limit := fs.Int("limit", 0, "cap the number of companies (0 means all)")
 	pageTimeout := fs.Duration("page-timeout", 45*time.Second, "per-page render budget")
 	workerTimeout := fs.Duration("worker-timeout", 90*time.Second, "whole worker process budget for one render")
-	maxBodyBytes := fs.Int64("max-body-bytes", 1_500_000, "bound on the rendered body handed to the fingerprint")
+	maxBodyBytes := fs.Int64("max-body-bytes", 3_000_000, "bound on the rendered body handed to the fingerprint")
 	commit := fs.Bool("commit", false, "write classifications (default is a read-only dry run)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -78,16 +80,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Stderr:         stderr,
 		MaxStdoutBytes: *maxBodyBytes*2 + (1 << 20),
 	}
-
-	classified, unknown, failed := 0, 0, 0
-	for _, c := range companies {
-		res, err := renderer.Render(ctx, browseruse.Request{
+	render := func(url string) (browseruse.Result, error) {
+		return renderer.Render(ctx, browseruse.Request{
 			Mode:           browseruse.ModeRender,
-			URL:            c.CareerSiteURL,
-			CompanyName:    c.Name,
+			URL:            url,
 			TimeoutSeconds: pageTimeout.Seconds(),
 			MaxBodyBytes:   *maxBodyBytes,
 		})
+	}
+
+	classified, unknown, failed := 0, 0, 0
+	for _, c := range companies {
+		res, err := render(c.CareerSiteURL)
 		if err != nil {
 			fmt.Fprintf(stderr, "company=%s vendor=failed err=%q\n", c.Slug, err)
 			failed++
@@ -101,11 +105,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		vendor := careers.Fingerprint(res.FinalURL, string(res.Body))
+		boardURL := res.FinalURL
+		hopped := false
+		if vendor == "" {
+			// One hop: a first-party careers page may not reveal its vendor, but the board is
+			// usually one "open positions" link away.
+			if hop := careers.NextHopURL(res.FinalURL, string(res.Body)); hop != "" {
+				if res2, err := render(hop); err == nil && res2.OK {
+					if v := careers.Fingerprint(res2.FinalURL, string(res2.Body)); v != "" {
+						vendor = v
+						boardURL = res2.FinalURL
+						hopped = true
+					}
+				}
+			}
+		}
 		if vendor == "" {
 			fmt.Fprintf(stdout, "company=%s vendor=unknown url=%s\n", c.Slug, res.FinalURL)
 			unknown++
 			continue
 		}
+
 		if *commit {
 			platformID, err := store.PlatformIDByName(ctx, database, vendor)
 			if err != nil {
@@ -113,13 +133,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 				failed++
 				continue
 			}
-			if err := store.SetCompanyApplicationPlatform(ctx, database, c.ID, platformID, res.FinalURL); err != nil {
+			if err := store.SetCompanyApplicationPlatform(ctx, database, c.ID, platformID, boardURL); err != nil {
 				fmt.Fprintf(stderr, "company=%s vendor=%s error=write err=%q\n", c.Slug, vendor, err)
 				failed++
 				continue
 			}
 		}
-		fmt.Fprintf(stdout, "company=%s vendor=%s url=%s\n", c.Slug, vendor, res.FinalURL)
+		fmt.Fprintf(stdout, "company=%s vendor=%s hop=%t url=%s\n", c.Slug, vendor, hopped, boardURL)
 		classified++
 	}
 
