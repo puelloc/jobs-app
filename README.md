@@ -63,21 +63,24 @@ That script handles the `PUID`/`PGID` ownership of `./data` (SQLite must be writ
 container user), rebuilds with `docker compose up -d --build --remove-orphans`, and reports any
 restart-loop or API failure. The API is on host port `8094`, the UI on `8095`.
 
-A fresh `./data` volume starts empty, so populate it in order:
+A fresh `./data` volume starts empty. Populate it from the UI's "Trigger a job" buttons (on the Runs
+dashboard) in this order, or with the equivalent `docker compose run` commands:
 
 ```
-docker compose run --rm app sp1500                                # 1. companies + career sites
-docker compose run --rm app classify -commit                      # 2. vendor classification
-docker compose run --rm app batch                                 # 3. full scrape sweep
+docker compose run --rm app sp1500                                # 1. index the S&P 500/400/600 companies
+docker compose run --rm app sp1500 resolve                        # 2. resolve each company's careers URL
+docker compose run --rm app sp1500 validate                       # 3. browser-validate the careers URLs (optional)
+docker compose run --rm app classify -commit                      # 4. classify each company's ATS vendor
+docker compose run --rm app batch                                 # 5. full browser-use scrape sweep
 ```
 
-`sp1500` writes the S&P 500/400/600 companies and resolves their careers URLs (the browser-use jobs
-cannot run without it). `classify -commit` records each company's applicant-tracking vendor (the
-scrape trigger refuses unclassified companies). `batch` then runs the browser-use listings scrape
-sequentially — one company at a time, so SQLite sees one writer and the model host sees one browser
-agent. `scrape -slug <slug> -vendor <vendor>` runs a single company instead, and `scraper` refreshes
-the separate RemoteOK job source. The `./data` volume carries `jobs.db` and the per-run agent traces
-across recreations.
+`sp1500` (indices) writes the companies; `sp1500 resolve` finds their careers URLs (classify cannot
+run without it); `sp1500 validate` marks each URL confirmed/wrong/unverifiable in a browser.
+`classify -commit` records each company's applicant-tracking vendor (the scrape trigger refuses
+unclassified companies). `batch` then runs the browser-use listings scrape sequentially — one company
+at a time, so SQLite sees one writer and the model host sees one browser agent. `scrape -slug <slug>
+-vendor <vendor>` runs a single company instead, and `scraper` refreshes the separate RemoteOK job
+source. The `./data` volume carries `jobs.db` and the per-run agent traces across recreations.
 
 The UI talks to the API over the compose network (it proxies `/api/*` to `app:8080`); it does not
 need the API host port exposed, which is kept for direct `curl` use.

@@ -15,6 +15,8 @@
 
 	const jobs = [
 		{ name: 'sp1500', label: 'Bootstrap companies' },
+		{ name: 'resolve', label: 'Resolve career sites' },
+		{ name: 'validate', label: 'Validate career sites' },
 		{ name: 'classify', label: 'Classify vendors' },
 		{ name: 'batch', label: 'Full scrape sweep' },
 		{ name: 'scraper', label: 'Refresh RemoteOK' }

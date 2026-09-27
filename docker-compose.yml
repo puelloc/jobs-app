@@ -4,7 +4,9 @@
 #
 # The API is a long-running service; the one-off jobs run against the same image
 # and volume, in order:
-#   docker compose run --rm app sp1500            # companies + career sites
+#   docker compose run --rm app sp1500            # index companies
+#   docker compose run --rm app sp1500 resolve    # careers URLs
+#   docker compose run --rm app sp1500 validate   # browser-validate (optional)
 #   docker compose run --rm app classify -commit  # vendor classification
 #   docker compose run --rm app batch             # full scrape sweep (sequential)
 #   docker compose run --rm app scrape -slug twilio -vendor eightfold   # one company

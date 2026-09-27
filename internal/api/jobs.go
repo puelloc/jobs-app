@@ -17,19 +17,22 @@ import (
 	"jobsapp/internal/store"
 )
 
-// jobSpec maps a trigger name to the platform its scrape_runs row records and the extra args the
-// binary needs. The binary name is the trigger name itself (resolved on PATH, which in the image is
-// /usr/local/bin).
+// jobSpec maps a trigger name to the binary it launches, the platform its scrape_runs row records,
+// and the extra args the binary needs. The binary is resolved on PATH (in the image that is
+// /usr/local/bin). `resolve` and `validate` are subcommands of the sp1500 binary.
 type jobSpec struct {
+	bin      string
 	platform string
 	args     []string
 }
 
 var triggerableJobs = map[string]jobSpec{
-	"sp1500":   {platform: "career_bootstrap"},
-	"classify": {platform: "career_classify", args: []string{"-commit"}},
-	"batch":    {platform: "career_batch"},
-	"scraper":  {platform: "remoteok"},
+	"sp1500":   {bin: "sp1500", platform: "career_bootstrap"},
+	"resolve":  {bin: "sp1500", platform: "career_resolution", args: []string{"resolve"}},
+	"validate": {bin: "sp1500", platform: "career_validation", args: []string{"validate"}},
+	"classify": {bin: "classify", platform: "career_classify", args: []string{"-commit"}},
+	"batch":    {bin: "batch", platform: "career_batch"},
+	"scraper":  {bin: "scraper", platform: "remoteok"},
 }
 
 // JobResponse is the POST /api/pipeline/{name} response.
@@ -80,14 +83,14 @@ func handleTriggerJob(db *sql.DB, dataDir string, gate *jobGate) http.HandlerFun
 			return
 		}
 
-		cmd := exec.Command(name, spec.args...)
+		cmd := exec.Command(spec.bin, spec.args...)
 		cmd.Stdout = logf
 		cmd.Stderr = logf
 		if err := cmd.Start(); err != nil {
 			_ = logf.Close()
 			gate.release()
 			_ = store.FinishRun(r.Context(), db, runID, "error", 0, 0, 0, strPtr(fmt.Sprintf("launch: %v", err)))
-			writeInternalError(w, fmt.Errorf("launch %s: %w", name, err))
+			writeInternalError(w, fmt.Errorf("launch %s: %w", spec.bin, err))
 			return
 		}
 
