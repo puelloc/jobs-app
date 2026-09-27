@@ -380,3 +380,72 @@ func TestResolverBoundsEveryHTMLFetch(t *testing.T) {
 		}
 	}
 }
+
+// Sitemap declarations are inputs, not candidates. Recording them as accepted attempts put 2,957
+// contentless rows into one full run - 46.6% of the trail - and made the attempt table useless for
+// the query it exists to answer.
+//
+// A declaration was never fetched: no status, no final URL. Only a sitemap that is actually fetched
+// produces an attempt, and that row comes from the sitemap tier with a real status and body.
+func TestSitemapDeclarationsAreNotRecordedAsAttempts(t *testing.T) {
+	pages := map[string]Response{
+		acmeHome: htmlPage(acmeHome, "Acme Corporation", `<nav><a href="/about">About</a></nav>`),
+		// robots.txt declares several sitemaps, none of which the ladder will need to fetch because
+		// the page has no careers link to find.
+		"https://www.acme.com/robots.txt": {
+			FinalURL: "https://www.acme.com/robots.txt", Status: 200, ContentType: "text/plain",
+			Body: []byte("User-agent: *\nDisallow: /admin/\n" +
+				"Sitemap: https://www.acme.com/sitemap-1.xml\n" +
+				"Sitemap: https://www.acme.com/sitemap-2.xml\n" +
+				"Sitemap: https://www.acme.com/sitemap-3.xml\n"),
+		},
+		"https://www.acme.com/sitemap.xml": {
+			FinalURL: "https://www.acme.com/sitemap.xml", Status: 404, ContentType: "application/xml",
+		},
+	}
+
+	stub := newStubFetcher(pages)
+	out, err := (Resolver{Fetcher: stub}).Resolve(context.Background(), "Acme Corporation", acmeHome)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	for _, a := range out.Attempts {
+		if a.Source == "robots_sitemap" {
+			t.Errorf("a sitemap declaration was recorded as an attempt: %+v", a)
+		}
+		// Every recorded non-signal attempt must have been fetched, so it carries a status.
+		if a.CandidateURL == "" {
+			t.Errorf("an attempt was recorded with no candidate URL: %+v", a)
+		}
+	}
+}
+
+// The robots paths are still used as candidates, so removing the declaration rows must not remove
+// the tier's actual output.
+func TestRobotsPathsStillBecomeCandidates(t *testing.T) {
+	pages := map[string]Response{
+		acmeHome: htmlPage(acmeHome, "Acme Corporation", `<nav><a href="/about">About</a></nav>`),
+		"https://www.acme.com/robots.txt": {
+			FinalURL: "https://www.acme.com/robots.txt", Status: 200, ContentType: "text/plain",
+			Body: []byte("User-agent: *\nDisallow: /about/careers/\n"),
+		},
+		"https://www.acme.com/sitemap.xml": {
+			FinalURL: "https://www.acme.com/sitemap.xml", Status: 404, ContentType: "application/xml",
+		},
+		"https://www.acme.com/about/careers/": htmlPage("https://www.acme.com/about/careers/",
+			"Careers at Acme", `<h1>Careers</h1><p>Search jobs</p>`),
+	}
+
+	stub := newStubFetcher(pages)
+	out, err := (Resolver{Fetcher: stub}).Resolve(context.Background(), "Acme Corporation", acmeHome)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !out.CareerSiteURLIsSet() {
+		t.Fatalf("the robots path candidate was lost: %+v", out.Attempts)
+	}
+	if stub.calls["https://www.acme.com/about/careers/"] == 0 {
+		t.Error("the robots-disclosed path was never fetched")
+	}
+}

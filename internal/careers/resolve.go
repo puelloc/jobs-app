@@ -245,14 +245,15 @@ func (r Resolver) fromRobots(ctx context.Context, companyName, origin string, ou
 			CompanyName: companyName, Source: "robots_path",
 		})
 	}
-	// A sitemap found here is worth recording as an attempt even though it is not a careers URL:
-	// the audit trail should show what the tier discovered.
-	for _, s := range sitemaps {
-		out.Attempts = append(out.Attempts, Attempt{
-			Source: "robots_sitemap", CandidateURL: s.URL, Kind: KindCareerSite,
-			ValidationState: StatusAccepted, Evidence: "sitemap_declared",
-		})
-	}
+	// Sitemap declarations are deliberately NOT recorded as attempts.
+	//
+	// They are inputs the tier uses to build candidates, not candidates themselves: a declaration
+	// was never fetched, carries no HTTP status, and has no final URL. Recording them as accepted
+	// attempts put 2,957 contentless rows into one run - 46.6% of the trail - and made the attempt
+	// table useless for the one query it exists to answer, which is why companies failed.
+	//
+	// A sitemap URL that is actually fetched does produce an attempt, recorded by the sitemap tier
+	// with the real status and body. That is the row worth keeping, and it already exists.
 	return res
 }
 
