@@ -36,11 +36,16 @@ func TestUpsertIndexCompaniesStoresEveryEnrichmentColumn(t *testing.T) {
 	var (
 		slug, name, industry, subIndustry, hq, membership, cik string
 	)
+	var article sql.NullString
 	if err := database.QueryRow(`
-SELECT slug, name, industry, gics_sub_industry, headquarters_location, index_membership, cik
+SELECT slug, name, industry, gics_sub_industry, headquarters_location, index_membership, cik,
+       article_title
 FROM companies WHERE slug = 'apple-inc'`).
-		Scan(&slug, &name, &industry, &subIndustry, &hq, &membership, &cik); err != nil {
+		Scan(&slug, &name, &industry, &subIndustry, &hq, &membership, &cik, &article); err != nil {
 		t.Fatalf("read back: %v", err)
+	}
+	if article.String != "Apple Inc." || !article.Valid {
+		t.Errorf("article_title = %v, want \"Apple Inc.\"", article)
 	}
 	if name != "Apple Inc." {
 		t.Errorf("name = %q", name)
@@ -62,9 +67,73 @@ FROM companies WHERE slug = 'apple-inc'`).
 	}
 }
 
-// dual-class: Alphabet is listed as GOOGL and GOOG on two rows with the same name. They must
+// The article title is the enwiki target the Security cell linked to, and it is frequently not the
+// company name: the S&P page reads "Advanced Micro Devices" and links to [[AMD]]. Tier 1 looks a
+// company's homepage up by this title, so losing it makes the lookup miss and the company look like
+// it has no website. It must survive the round trip.
+func TestUpsertIndexCompaniesStoresTheArticleTitle(t *testing.T) {
+	database := newTestDB(t)
+
+	upsertTestIndex(t, database, IndexSP500, []IndexCompany{{
+		Name:     "Advanced Micro Devices",
+		Article:  "AMD",
+		Industry: "Information Technology",
+	}})
+
+	var article sql.NullString
+	if err := database.QueryRow(
+		`SELECT article_title FROM companies WHERE slug = 'advanced-micro-devices'`).
+		Scan(&article); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !article.Valid || article.String != "AMD" {
+		t.Errorf("article_title = %v, want \"AMD\"", article)
+	}
+}
+
+// A row whose Security cell carries no wikilink has no article title, and that is recorded as NULL
+// rather than as an empty string or a copy of the name: "no article" is a fact a later tier needs to
+// distinguish from "article named after the company".
+func TestUpsertIndexCompaniesStoresNullArticleWhenThereIsNoWikilink(t *testing.T) {
+	database := newTestDB(t)
+
+	upsertTestIndex(t, database, IndexSP600, []IndexCompany{{
+		Name:    "Some Private Co.",
+		Article: "",
+	}})
+
+	var article sql.NullString
+	if err := database.QueryRow(
+		`SELECT article_title FROM companies WHERE slug = 'some-private-co'`).Scan(&article); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if article.Valid {
+		t.Errorf("article_title = %q, want NULL when the row had no wikilink", article.String)
+	}
+}
+
+// A re-run of the index must refresh the article title: the target of a wikilink changes when an
+// article is renamed, and a stale title sends tier 1 to the wrong place.
+func TestUpsertIndexCompaniesUpdatesTheArticleTitleOnReRun(t *testing.T) {
+	database := newTestDB(t)
+
+	upsertTestIndex(t, database, IndexSP500, []IndexCompany{{Name: "Erie Indemnity", Article: "Erie Indemnity"}})
+	upsertTestIndex(t, database, IndexSP500, []IndexCompany{{Name: "Erie Indemnity", Article: "Erie Insurance Group"}})
+
+	var article sql.NullString
+	if err := database.QueryRow(
+		`SELECT article_title FROM companies WHERE slug = 'erie-indemnity'`).Scan(&article); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if article.String != "Erie Insurance Group" {
+		t.Errorf("article_title = %q, want the refreshed title", article.String)
+	}
+}
+
+// design: dual-class: Alphabet is listed as GOOGL and GOOG on two rows with the same name. They must
 // collapse to one company rather than two.
 func TestUpsertIndexCompaniesDedupesShareClassesBySlug(t *testing.T) {
+
 	database := newTestDB(t)
 
 	inserted := upsertTestIndex(t, database, IndexSP500, []IndexCompany{
@@ -242,30 +311,42 @@ func TestUpsertIndexCompaniesMovesMembership(t *testing.T) {
 	}
 }
 
-// The wiki article title is carried through the parser but has no column yet. It is the join key
-// M2 uses against Wikidata, so this test records that the gap is deliberate rather than an
-// oversight: when a column is added, this test is what will change.
-func TestUpsertIndexCompaniesDoesNotPersistTheArticleTitle(t *testing.T) {
+// The company name is not a usable join key on its own, which is why article_title exists. This
+// asserts the column is real and holds the linked title rather than the name, so a future change
+// that reverts the write path fails here rather than silently costing tier 1 its lookups again.
+func TestUpsertIndexCompaniesPersistsTheArticleTitleColumn(t *testing.T) {
 	database := newTestDB(t)
 
 	upsertTestIndex(t, database, IndexSP500, []IndexCompany{
-		{Name: "Apple Inc.", Article: "Apple Inc.", Industry: "Information Technology"},
+		{Name: "Advanced Micro Devices", Article: "AMD", Industry: "Information Technology"},
 	})
 
-	// No column holds it, so nothing should silently claim to.
 	rows, err := database.Query(`SELECT name FROM pragma_table_info('companies')`)
 	if err != nil {
 		t.Fatalf("table_info: %v", err)
 	}
 	defer rows.Close()
+	found := false
 	for rows.Next() {
 		var col string
 		if err := rows.Scan(&col); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if strings.Contains(strings.ToLower(col), "article") {
-			t.Fatalf("companies gained a column %q holding the article title; persist it in the upsert too", col)
+		if strings.EqualFold(col, "article_title") {
+			found = true
 		}
+	}
+	if !found {
+		t.Fatal("companies has no article_title column, so tier 1 has to guess the article from the name")
+	}
+
+	var article string
+	if err := database.QueryRow(
+		`SELECT article_title FROM companies WHERE slug = 'advanced-micro-devices'`).Scan(&article); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if article != "AMD" {
+		t.Errorf("article_title = %q, want %q rather than the company name", article, "AMD")
 	}
 }
 

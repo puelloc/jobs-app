@@ -244,9 +244,12 @@ func (r Runner) selectWork(companies []Company, opts Options, sum *Summary) []Co
 }
 
 // companyRow is the subset of companies a run needs to choose and resolve.
+//
+// article_title is coalesced rather than read as NULL because the resolver works in plain strings;
+// the empty-string-versus-NULL distinction is meaningful in the database, not here.
 const companyQuery = `
 SELECT id, slug, name, coalesce(career_site_url,''),
-       coalesce(website,''), coalesce(name,'')
+       coalesce(website,''), coalesce(article_title,'')
   FROM companies
  ORDER BY slug`
 
@@ -263,7 +266,7 @@ func LoadCompanies(ctx context.Context, db *sql.DB, onlySlugs []string) ([]Compa
 		}
 		query = `
 SELECT id, slug, name, coalesce(career_site_url,''),
-       coalesce(website,''), coalesce(name,'')
+       coalesce(website,''), coalesce(article_title,'')
   FROM companies
  WHERE slug IN (` + strings.Join(placeholders, ",") + `)
  ORDER BY slug`
@@ -278,13 +281,18 @@ SELECT id, slug, name, coalesce(career_site_url,''),
 	var out []Company
 	for rows.Next() {
 		var c Company
-		var unusedArticle string
-		if err := rows.Scan(&c.ID, &c.Slug, &c.Name, &c.CareerSiteURL, &c.Website, &unusedArticle); err != nil {
+		var article string
+		if err := rows.Scan(&c.ID, &c.Slug, &c.Name, &c.CareerSiteURL, &c.Website, &article); err != nil {
 			return nil, fmt.Errorf("scan company: %w", err)
 		}
-		// The wiki title is the company name for the rows this bootstrap wrote: the parser stores
-		// the security name, and tier 1 keys on that same string.
-		c.Article = c.Name
+		// Tier 1 keys on the article the index page actually linked to, which is often not the
+		// security name: the S&P page says "Advanced Micro Devices" and links to [[AMD]]. The name is
+		// the fallback for the rows whose Security cell carried no wikilink, which is the best
+		// identity those rows have.
+		c.Article = article
+		if c.Article == "" {
+			c.Article = c.Name
+		}
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {

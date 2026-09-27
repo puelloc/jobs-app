@@ -86,8 +86,8 @@ func upsertIndexCompany(ctx context.Context, q Querier, slug, index string, c In
 	const query = `
 INSERT INTO companies (
     slug, name, industry, cik, gics_sub_industry, headquarters_location,
-    index_membership, website, website_source
-) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+    index_membership, article_title, website, website_source
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
 ON CONFLICT(slug) DO UPDATE SET
     name                  = excluded.name,
     industry              = excluded.industry,
@@ -95,6 +95,7 @@ ON CONFLICT(slug) DO UPDATE SET
     gics_sub_industry     = excluded.gics_sub_industry,
     headquarters_location = excluded.headquarters_location,
     index_membership      = excluded.index_membership,
+    article_title         = excluded.article_title,
     updated_at            = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 WHERE companies.name                  IS NOT excluded.name
    OR companies.industry              IS NOT excluded.industry
@@ -102,6 +103,7 @@ WHERE companies.name                  IS NOT excluded.name
    OR companies.gics_sub_industry     IS NOT excluded.gics_sub_industry
    OR companies.headquarters_location IS NOT excluded.headquarters_location
    OR companies.index_membership      IS NOT excluded.index_membership
+   OR companies.article_title         IS NOT excluded.article_title
 RETURNING id`
 
 	// cik is stored as text: the S&P 400 page has no CIK column and its CIK= values are
@@ -118,7 +120,8 @@ RETURNING id`
 	// methods, and the RETURNING rows must be consumed for the statement to have run.
 	// Empty strings are stored as NULL so "not known" has one representation rather than two.
 	rows, err := q.QueryContext(ctx, query,
-		slug, c.Name, nullable(c.Industry), cik, nullable(c.SubIndustry), nullable(c.Headquarters), index)
+		slug, c.Name, nullable(c.Industry), cik, nullable(c.SubIndustry), nullable(c.Headquarters),
+		index, nullable(c.Article))
 	if err != nil {
 		return false, fmt.Errorf("upsert company %q (slug %q): %w", c.Name, slug, err)
 	}

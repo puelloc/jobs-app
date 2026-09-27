@@ -1,0 +1,19 @@
+-- 008_company_article_title.sql: keep the enwiki article title the index page linked to.
+--
+-- Why this is a column rather than something recomputed from the name: the S&P constituent tables
+-- link each security name to its Wikipedia article, and the link target is frequently not the name.
+-- The S&P 500 page reads "Advanced Micro Devices" and links to [[AMD]]; it reads "Amazon" and links
+-- to [[Amazon (company)]]; "Deere & Company" links to [[John Deere]].
+--
+-- Tier 1 resolves a company's homepage from that article's infobox, and it looks the result up by
+-- this title. Deriving the title from the name instead - which is what the resolver did, because the
+-- parser's Article field was parsed and then dropped at write time - misses every one of those
+-- companies. Measured on the 562-company residue from run 6: 103 companies whose security name
+-- found no article at all have a link target that resolves, and every one of them carries an
+-- infobox website. The information was already in the wikitext and in the parser's output; only the
+-- write path was losing it.
+--
+-- NULL means the row's Security cell carried no wikilink at all (about 253 rows across the three
+-- pages), which is a different fact from an article named after the company and must stay
+-- distinguishable.
+ALTER TABLE companies ADD COLUMN article_title TEXT;

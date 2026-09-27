@@ -84,6 +84,72 @@ func seedCompany(t *testing.T, database *sql.DB, id int64, slug, name string) {
 	}
 }
 
+// --- the article title is the tier-1 join key -----------------------------
+
+// Tier 1 looks a homepage up by the company's enwiki article, so a company with a stored article
+// title must be looked up under that title and not under its name. The S&P page says "Advanced Micro
+// Devices" and links to [[AMD]]; looking up the name is what the old code did, and the API answers
+// with a redirect that was then filed under the wrong key.
+func TestLoadCompaniesUsesTheStoredArticleTitle(t *testing.T) {
+	database, _ := newRunTestDB(t)
+	if _, err := database.Exec(
+		`INSERT INTO companies (id, slug, name, article_title) VALUES (1, 'advanced-micro-devices', 'Advanced Micro Devices', 'AMD')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := LoadCompanies(context.Background(), database, nil)
+	if err != nil {
+		t.Fatalf("LoadCompanies: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("loaded %d companies, want 1", len(got))
+	}
+	if got[0].Article != "AMD" {
+		t.Errorf("Article = %q, want the stored article title %q rather than the company name", got[0].Article, "AMD")
+	}
+}
+
+// A row whose Security cell carried no wikilink has a NULL article_title. The name is then the best
+// identity available, which is what the previous behaviour used for every row - so this keeps the
+// no-article rows working rather than regressing them to an empty lookup key.
+func TestLoadCompaniesFallsBackToTheNameWhenThereIsNoArticleTitle(t *testing.T) {
+	database, _ := newRunTestDB(t)
+	seedCompany(t, database, 1, "acme", "Acme Corporation")
+
+	got, err := LoadCompanies(context.Background(), database, nil)
+	if err != nil {
+		t.Fatalf("LoadCompanies: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("loaded %d companies, want 1", len(got))
+	}
+	if got[0].Article != "Acme Corporation" {
+		t.Errorf("Article = %q, want the name as the fallback", got[0].Article)
+	}
+}
+
+// The only-slugs path builds its own SQL, so it needs the same column: a restricted run would
+// otherwise look every company up by name while an unrestricted run used the title.
+func TestLoadCompaniesUsesTheArticleTitleOnTheOnlySlugsPath(t *testing.T) {
+	database, _ := newRunTestDB(t)
+	if _, err := database.Exec(
+		`INSERT INTO companies (id, slug, name, article_title) VALUES (1, 'amd', 'Advanced Micro Devices', 'AMD')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	seedCompany(t, database, 2, "other", "Other Corp")
+
+	got, err := LoadCompanies(context.Background(), database, []string{"amd"})
+	if err != nil {
+		t.Fatalf("LoadCompanies: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("loaded %d companies, want 1", len(got))
+	}
+	if got[0].Article != "AMD" {
+		t.Errorf("Article = %q, want the stored article title on the restricted path too", got[0].Article)
+	}
+}
+
 // tier1Stub answers the two tier-1 APIs for a title. A test that enables ResolveHomepages needs it,
 // or the run's homepage lookup goes to the network.
 func tier1Stub(t *testing.T, title, website string) *pageFetcher {
