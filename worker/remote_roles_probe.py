@@ -33,6 +33,8 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+from agent_trace import TraceWriter
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Must precede any browser_use import (see worker/browser_worker.py).
@@ -139,7 +141,8 @@ Rules:
 
 
 async def run_one(url: str, company: str, host: str, model: str, max_steps: int,
-                  timeout: int, use_vision: bool, domain_guard: bool, exe: str) -> dict:
+                  timeout: int, use_vision: bool, domain_guard: bool, exe: str,
+                  trace: TraceWriter) -> dict:
     from browser_use import Agent, BrowserProfile, ChatOllama
     from pydantic import BaseModel
 
@@ -171,6 +174,8 @@ async def run_one(url: str, company: str, host: str, model: str, max_steps: int,
         use_vision=use_vision,
         max_actions_per_step=MAX_ACTIONS_PER_STEP,
         extend_system_message=SYSTEM_EXTRA,
+        register_new_step_callback=trace.step_callback(),
+        register_done_callback=trace.done_callback(),
     )
 
     start = time.monotonic()
@@ -239,6 +244,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=720, help="per-site seconds")
     ap.add_argument("--vision", action="store_true", help="include screenshots (slower)")
     ap.add_argument("--no-guard", action="store_true", help="disable the allowed_domains guard")
+    ap.add_argument("--trace", default="", help="append agent events to this JSONL file")
     args = ap.parse_args()
 
     exe = chromium_path()  # before asyncio.run: sync Playwright cannot run inside the loop
@@ -249,7 +255,7 @@ def main() -> int:
 
     result = asyncio.run(run_one(
         args.url, args.company, args.host, args.model, args.max_steps,
-        args.timeout, args.vision, not args.no_guard, exe,
+        args.timeout, args.vision, not args.no_guard, exe, TraceWriter(args.trace),
     ))
     print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
     return 0
