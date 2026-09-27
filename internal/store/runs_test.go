@@ -203,6 +203,43 @@ func TestFinishRunUnknownIDIsNotAnError(t *testing.T) {
 	}
 }
 
+func TestReconcileStaleRunsMarksOnlyRunning(t *testing.T) {
+	database := newTestDB(t)
+	ctx := context.Background()
+
+	seedRun(t, database, 1, "2026-09-27T01:00:00.000Z", nil, "running", nil)
+	seedRun(t, database, 2, "2026-09-27T01:10:00.000Z", "2026-09-27T01:10:05.000Z", "ok", nil)
+
+	n, err := ReconcileStaleRuns(ctx, database)
+	if err != nil {
+		t.Fatalf("ReconcileStaleRuns: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("reconciled %d runs, want 1", n)
+	}
+
+	var status, errText string
+	var finished sql.NullString
+	if err := database.QueryRow(`SELECT status, error_text, finished_at FROM scrape_runs WHERE id = 1`).
+		Scan(&status, &errText, &finished); err != nil {
+		t.Fatalf("read run 1: %v", err)
+	}
+	if status != "error" || errText != "interrupted by restart" {
+		t.Errorf("run 1 = status %q err %q, want error / interrupted by restart", status, errText)
+	}
+	if !finished.Valid {
+		t.Errorf("run 1 finished_at should be set")
+	}
+
+	var okStatus string
+	if err := database.QueryRow(`SELECT status FROM scrape_runs WHERE id = 2`).Scan(&okStatus); err != nil {
+		t.Fatalf("read run 2: %v", err)
+	}
+	if okStatus != "ok" {
+		t.Errorf("run 2 status = %q, want ok (untouched)", okStatus)
+	}
+}
+
 // --- retry policy --------------------------------------------------------
 
 func TestRunWithOneRetryDoesNotRetrySuccess(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	"jobsapp/internal/api"
 	"jobsapp/internal/config"
 	"jobsapp/internal/db"
+	"jobsapp/internal/store"
 )
 
 // shutdownTimeout bounds how long in-flight requests may finish after a signal.
@@ -72,6 +73,14 @@ func run() int {
 		return 1
 	}
 	defer database.Close()
+
+	// A fresh server process means any run still marked 'running' was killed with the previous
+	// process (its reaper never ran), so close those rows out rather than leaving them stuck.
+	if n, err := store.ReconcileStaleRuns(context.Background(), database); err != nil {
+		fmt.Fprintf(os.Stderr, "server: reconcile stale runs: %v\n", err)
+	} else if n > 0 {
+		fmt.Fprintf(os.Stderr, "server: marked %d stale running run(s) as interrupted by restart\n", n)
+	}
 
 	scrapeCmd := strings.Fields(cfg.ScrapeCommand)
 

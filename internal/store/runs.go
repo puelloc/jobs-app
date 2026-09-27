@@ -182,3 +182,28 @@ UPDATE scrape_runs
 	}
 	return n > 0, nil
 }
+
+// ReconcileStaleRuns closes out every run still marked 'running' and reports how many it touched.
+//
+// Called once at startup: a fresh server process means any previously-running job was killed with
+// it (the server reaps a job's run in a goroutine, and a killed process never runs that goroutine),
+// so those rows would otherwise stay stuck in 'running' forever. Marking them as error with a note
+// is the recovery path - the operator can then re-run, and the job skips work it already completed.
+func ReconcileStaleRuns(ctx context.Context, db *sql.DB) (int64, error) {
+	const q = `
+UPDATE scrape_runs
+   SET finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+       status      = 'error',
+       error_text  = 'interrupted by restart'
+ WHERE status = 'running'`
+
+	res, err := db.ExecContext(ctx, q)
+	if err != nil {
+		return 0, fmt.Errorf("reconcile stale runs: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("reconcile stale runs: rows affected: %w", err)
+	}
+	return n, nil
+}
