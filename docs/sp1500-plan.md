@@ -175,7 +175,7 @@ stored still that?". It therefore never writes `career_site_url`.
 | Resumability: already-validated companies are skipped by default | done |
 | Escalation on the residue (`--escalate` → browser-use agent → re-render → gate) | done |
 
-**Measured outcome** (2026-09-27, all 634 stored URLs in `data/sp1500-live/jobs.db`; run report
+**Measured outcome** (2026-09-27, all 634 stored URLs in `jobs.db`; run report
 `docs/runs/2026-09-27-browser-validation.md`): **496 confirmed, 62 wrong, 76 unverifiable**. A default
 re-run skips all 634. Four defects were found and fixed during the first pass, the largest being that
 the discovery gate is not a validation gate - see failure mode 7 and the corrections ledger.

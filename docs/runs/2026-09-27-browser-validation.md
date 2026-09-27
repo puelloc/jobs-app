@@ -22,7 +22,7 @@ behind. Each company's row records which run produced its verdict in
 | 22 | `... --only-slugs=<68 affected>` | the 67 wrong + `amgen` | 9 confirmed, 58 wrong, 1 unverifiable | 59 |
 | 23 | `... --only-slugs=<9 flipped>` | the 9 that run 22 confirmed | 5 confirmed, 4 wrong | 9 |
 
-**Final, across all 634 stored `career_site_url` values in `data/sp1500-live/jobs.db`:**
+**Final, across all 634 stored `career_site_url` values in `jobs.db`:**
 
 | Verdict | Companies |
 | --- | ---: |
@@ -179,6 +179,25 @@ Three differences worth naming:
 - **The agent budget is 6 minutes per site**, which is why escalation is a sample rather than a pass.
 - **634 of the live database's 749 stored URLs.** A concurrent `resolve` run added 115 URLs after this
   snapshot. They are unvalidated, and validating them is a separate run against the live database.
+
+## Afterwards: the database was consolidated (2026-09-27)
+
+This run happened against a copy of the S&P 1500 database that a previous session had created at
+`/tmp/sp1500-live/jobs.db`. Two things followed it, and they change where these verdicts live:
+
+- The 200 URLs a later resolution run had added were merged in before `/tmp` was wiped.
+- The whole S&P dataset was then merged into **`jobs.db` at the repo root** — the database that
+  already existed for the RemoteOK feed — with `scrape_runs.id` offset by 1000 (so the runs above are
+  1021, 1022, 1023 in that file) and companies rejoined by slug. `internal/db/oneoff/` records how.
+
+The verdicts above are unchanged by the move. What is *not* recoverable from the merged database is
+the on-disk evidence for the pre-validation resolution attempts: 1,867 `url_resolution_attempts` rows
+have `evidence_path` values under `/tmp/sp1500-live/`, which no longer exists. The 794 rows written by
+this validation pass point at `data/sp1500-live/data/raw/` and do resolve. Query the loss directly
+with `SELECT count(*) FROM url_resolution_attempts WHERE evidence_path LIKE '/tmp/%'`.
+
+Current tally in the merged database, after a 10-company run that was started by accident and killed:
+**503 confirmed / 64 wrong / 77 unverifiable of 644 validated**, with 190 stored URLs unvalidated.
 
 ## Method notes
 

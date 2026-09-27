@@ -9,33 +9,60 @@ sites into `job_listings`**.
 | Current state | Career-site resolution **and** browser validation complete; see `docs/sp1500-plan.md` §3 and `docs/runs/2026-09-27-browser-validation.md` |
 | Next action | Pick the first ATS slice (§5) and write the scraper against the existing `job_listings` contract |
 | Blocking issues | none |
-| Next fetch is | `data/sp1500-live/jobs.db` — the durable workspace copy, not `/tmp` |
+| **Canonical database** | **`jobs.db` in the repo root** — one file, no per-source copies |
 
 ---
 
 ## 1. The input: where the careers sites are
 
-`data/sp1500-live/jobs.db` (durable, inside the repo, gitignored via `/data/`).
+**`jobs.db`** — the repo-root database that already existed, migrated to the current schema and
+consolidated on 2026-09-27. It is gitignored (`*.db`), like all data in this project.
 
-It was assembled from two sources and merged on 2026-09-27:
+It now holds both workstreams:
 
-- **URLs** from the resolution runs, whose live database is `/tmp/sp1500-live/jobs.db`. That copy is
-  volatile (`/tmp`), so the 200 URLs its last run (run 11, `ok`, 202 inserted) added were merged into
-  the workspace copy. All 634 URLs the two databases already shared were byte-identical, so the merge
-  was purely additive.
-- **Validation verdicts** from the browser pass, which only ever ran against the workspace copy.
-
-State today:
-
-| Measure | Count |
+| | Count |
 | --- | ---: |
-| Companies | 1,498 |
+| Companies | 1,588 |
 | **Stored `career_site_url`** | **834** |
-| Of those, validated | 634 |
-| - `confirmed` — loads and is a job listing or careers landing page | 496 |
-| - `wrong` — demonstrably not a careers page | 62 |
-| - `unverifiable` — 403 / bot wall / timeout, nothing proved | 76 |
-| Stored but **not yet validated** | 200 |
+| Of those, validated | 644 |
+| - `confirmed` | 503 |
+| - `wrong` | 64 |
+| - `unverifiable` | 77 |
+| Stored but **not yet validated** | 190 |
+| `job_listings` (RemoteOK) | 99 |
+| `company_sources` rows | 1,589 |
+
+### How it was consolidated, and why there were two files
+
+There should never have been two. The root `jobs.db` was created by `config.DefaultDBPath = "./jobs.db"`,
+which is relative to the working directory, so the first scraper that ran from the repo root created it.
+The S&P 1500 work was then given an explicit `DB_PATH=/tmp/sp1500-live/jobs.db`, which is how a second,
+source-named database appeared — and `/tmp` was wiped soon after, taking that file with it.
+`data/sp1500-live/jobs.db` is a frozen pre-merge copy kept as a safety net (§8).
+
+The merge moved the S&P rows into the original file and is recorded in
+`internal/db/oneoff/consolidate_sp1500_into_jobs_db.sql` (a one-off script, deliberately **not** a migration: it moves rows
+between files and must never run on a fresh database). Both files had independent id sequences, so
+`companies.id` was rejoined by slug and `scrape_runs.id` was offset by 1000; `url_resolution_attempts`
+was remapped through both. One company — `johnson-controls` — existed in both and now carries two
+`company_sources` rows (`remoteok` and `wikipedia_sp500`).
+
+### Sources are data now, not columns
+
+Migration `013_company_sources.sql` adds `company_sources(company_id, platform_id, source_key,
+first_seen_at, last_seen_at)`. That is the generic place for "which sources contributed this company":
+the S&P 500 is just `platform_id = 20`, one contributor among many, alongside `remoteok = 1`.
+
+```
+wikipedia_sp600  599      remoteok  91
+wikipedia_sp500  500
+wikipedia_sp400  399
+```
+
+`companies.index_membership` (`sp500`/`sp400`/`sp600`) and its neighbours (`ticker`, `cik`,
+`gics_sub_industry`, `headquarters_location`) are one source's attributes and are now legacy: they are
+still written by the S&P bootstrap, but a new company source needs a `platforms` row and a
+`company_sources` row, and no schema change at all.
 
 The scraping input, in the order worth using it:
 
@@ -46,7 +73,7 @@ SELECT id, slug, name, career_site_url
  WHERE career_site_url_verdict = 'confirmed'
  ORDER BY slug;
 
--- 2. The 200 that have a URL but no verdict yet. Unvalidated, not rejected - a resolver found them
+-- 2. The 190 that have a URL but no verdict yet. Unvalidated, not rejected - a resolver found them
 --    after the validation snapshot.
 SELECT id, slug, name, career_site_url
   FROM companies
@@ -90,8 +117,9 @@ new one.
 `job_listings` columns: `company_id`, `company_application_platform_id`, `external_id`,
 `discovery_platform_id`, `discovery_url`, `listing_url`, `application_url`, `title`, `employment_type`,
 `is_remote`, `location_text`, `country`, `is_us`, `description`, `salary_*`, `tags_json`, `posted_at`,
-`first_seen_at`, `last_seen_at`, `status`, `raw_data`, `created_at`, `updated_at`. It is **empty** today
-(0 rows) — the RemoteOK data lives in the other `jobs.db` in the repo root.
+`first_seen_at`, `last_seen_at`, `status`, `raw_data`, `created_at`, `updated_at`. It holds the 99
+RemoteOK listings today, so the careers-site scraper is adding rows to a non-empty table — the
+`discovery_platform_id` / `company_application_platform_id` split is what keeps the two sources apart.
 
 `platforms` bands (from `002`'s header, keep them): job boards **1–9** (1–4 are remoteok, remotive,
 himalayas, weworkremotely), application systems **10–19** (greenhouse, lever, workday, icims, ashby,
@@ -210,7 +238,7 @@ duplicates.
 
 ```bash
 cd /Users/cris/Projects/jobs/jobs-app
-export DB_PATH="$PWD/data/sp1500-live/jobs.db" DATA_DIR="$PWD/data/sp1500-live/data"
+export DB_PATH="$PWD/jobs.db" DATA_DIR="$PWD/data/sp1500-live/data"
 export ENABLE_BROWSER_USE=1 BROWSER_USE_CONFIG_DIR="$PWD/.browseruse"
 export BROWSER_WORKER_COMMAND="$PWD/.venv-browser/bin/python $PWD/worker/browser_worker.py"
 go build -o data/sp1500-live/sp1500 ./cmd/sp1500
@@ -221,9 +249,10 @@ go build -o data/sp1500-live/sp1500 ./cmd/sp1500
 ./data/sp1500-live/sp1500 validate --escalate --only-slugs=<slug> --agent-timeout 6m   # needs OLLAMA_HOST
 ```
 
-- **Skipping validated sites is the default** — a plain run today reports `companies=0 skipped=634` and
-  exits 4. That means the 200 unvalidated URLs are the only work a default run would pick up, and it
-  would leave the 76 `unverifiable` alone until they are stale or explicitly refreshed.
+- **Skipping validated sites is the default** — a plain run reports `skipped=644` and picks up only the
+  190 unvalidated URLs; the 77 `unverifiable` are left alone until they are stale or explicitly
+  refreshed. **A default run therefore starts real network work**: use `--dry-run --limit 1` to see the
+  selection without fetching anything.
 - Python worker environment: `.venv-browser/` (gitignored), pinned in `worker/requirements.txt`.
   Rebuild with `/opt/homebrew/bin/python3.12 -m venv .venv-browser && ./.venv-browser/bin/pip install -r worker/requirements.txt`.
 - `docs/browser-use-worker.md` is the worker contract; `internal/careers/validate.go` holds the gate,
@@ -236,7 +265,7 @@ go build -o data/sp1500-live/sp1500 ./cmd/sp1500
    against one already found on a job board. Nothing in the schema forces the answer.
 2. **Which ATS vendors get HTML extraction first?** Oracle Cloud, Eightfold, Workday, Phenom,
    SuccessFactors and Taleo have no public JSON API; the plan's M2b is that work.
-3. **Do we scrape the 200 unvalidated URLs, and re-validate the 76 unverifiable first?** The clean 496
+3. **Do we scrape the 190 unvalidated URLs, and re-validate the 77 unverifiable first?** The clean 503
    are the safe start.
 4. **What is the per-host rate policy for a 500-site crawl?** The resolution path has a limiter; the
    new job should reuse it rather than invent a second policy.
@@ -261,6 +290,6 @@ Artifacts from the validation pass:
 
 - `docs/runs/2026-09-27-browser-validation.md` — the measured outcome and the four defects fixed.
 - `docs/runs/2026-09-27-residue-after-join-fix.md` — the tier-1 re-keying fix and its measurement.
-- `data/sp1500-live/jobs.db` — the merged database described in §1.
+- `jobs.db` — the merged database described in §1.
 - `data/sp1500-live/data/raw/` — the stored Wikipedia payloads and per-company careers evidence.
 - `data/sp1500-live/*.out` / `*.err` — raw run logs, including the per-company progress lines.

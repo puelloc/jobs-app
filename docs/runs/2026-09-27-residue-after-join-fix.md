@@ -125,6 +125,6 @@ rather than the only copy.
    residue needs revisiting once they are classified.
 
 **This is where the careers-site workstream stops.** The durable dataset is
-`data/sp1500-live/jobs.db`; the scratch copy this run wrote, `/tmp/sp1500-live/jobs.db`, has had its
+`jobs.db`; the scratch copy this run wrote, `/tmp/sp1500-live/jobs.db`, has had its
 URLs merged into it and is no longer authoritative. The next workstream - fetching job listings from
 these URLs - is planned in `docs/scraping-plan.md`.
