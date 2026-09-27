@@ -1,6 +1,7 @@
 <script>
 	import { invalidate } from '$app/navigation';
 	import { poll } from '$lib/poll.js';
+	import LogView from '$lib/LogView.svelte';
 
 	let { data } = $props();
 
@@ -18,13 +19,9 @@
 <main>
 	<div class="heading">
 		<h1>Server log</h1>
-		<p class="sub">Tail of the Go API server's stderr · refreshes every 3s</p>
+		<p class="sub">Most recent first · paginated · refreshes live</p>
 	</div>
-	{#if !log}
-		<p class="quiet">No log output yet.</p>
-	{:else}
-		<pre class="log">{log}</pre>
-	{/if}
+	<LogView text={log} />
 </main>
 
 <style>
@@ -52,25 +49,6 @@
 		font-size: 0.9rem;
 	}
 
-	.quiet {
-		margin: 0;
-		color: #6b7178;
-	}
-
-	.log {
-		margin: 0;
-		padding: 0.9rem 1rem;
-		background: #ffffff;
-		border: 1px solid #e4e7ec;
-		border-radius: 8px;
-		white-space: pre-wrap;
-		word-break: break-word;
-		font-size: 0.8rem;
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		max-height: 70vh;
-		overflow: auto;
-	}
-
 	@media (max-width: 600px) {
 		main {
 			padding: 1.25rem 1rem 3rem;
@@ -82,3 +60,4 @@
 		}
 	}
 </style>
+

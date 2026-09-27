@@ -1,6 +1,7 @@
 <script>
 	import { invalidate } from '$app/navigation';
 	import { poll } from '$lib/poll.js';
+	import LogView from '$lib/LogView.svelte';
 	import {
 		formatDuration,
 		formatRunStatus,
@@ -14,7 +15,6 @@
 	const events = $derived(data.trace?.events ?? []);
 	const present = $derived(data.trace?.present ?? false);
 	const log = $derived(data.log?.log ?? '');
-	const logPresent = $derived(data.log?.present ?? false);
 	const serverLog = $derived(data.serverLog ?? '');
 	const isAgentRun = $derived(run.platform === 'career_listings');
 	// These jobs record their own run but tee their output into the server log, not a per-run file.
@@ -86,15 +86,9 @@
 		<h2>Output</h2>
 		{#if isSelfTracked}
 			<p class="quiet">This job writes to the shared <a href="/logs">server log</a> — latest output:</p>
-			{#if !serverLog}
-				<p class="quiet">No output yet.</p>
-			{:else}
-				<pre class="log">{serverLog}</pre>
-			{/if}
-		{:else if !logPresent || !log}
-			<p class="quiet">No output yet.</p>
+			<LogView text={serverLog} />
 		{:else}
-			<pre class="log">{log}</pre>
+			<LogView text={log} />
 		{/if}
 	</section>
 
@@ -313,20 +307,6 @@
 		white-space: pre-wrap;
 		word-break: break-word;
 		font-size: 0.88rem;
-	}
-
-	.log {
-		margin: 0;
-		padding: 0.7rem 0.9rem;
-		background: #ffffff;
-		border: 1px solid #e4e7ec;
-		border-radius: 8px;
-		white-space: pre-wrap;
-		word-break: break-word;
-		font-size: 0.8rem;
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		max-height: 40rem;
-		overflow: auto;
 	}
 
 	.error {
