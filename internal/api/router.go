@@ -25,6 +25,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	// /api/companies/churn is never parsed as a company id.
 	mux.HandleFunc("GET /api/companies/churn", handleListChurn(db))
 	mux.HandleFunc("GET /api/companies/{id}", handleGetCompany(db))
+	mux.HandleFunc("GET /api/runs", handleListRuns(db))
 
 	// Deliberately no catch-all pattern: registering "/" would match every
 	// method, and the mux would then serve it for POST /api/jobs instead of

@@ -164,3 +164,34 @@ type ChurnResponse struct {
 	Offset  int           `json:"offset"`
 	Total   int64         `json:"total"`
 }
+
+// --- run status / history -------------------------------------------------
+
+// RunListItem is one entry of the GET /api/runs response: one scraper/worker run.
+//
+// finished_at is null exactly while a run is in flight (or was abandoned before
+// it could finish), and error_text is null for a successful run. dry_run is a
+// bool on the wire; the schema stores it as 0/1 and the handler converts it.
+type RunListItem struct {
+	ID                int64   `json:"id"`
+	Platform          string  `json:"platform"`
+	Status            string  `json:"status"`
+	StartedAt         string  `json:"started_at"`
+	FinishedAt        *string `json:"finished_at"`
+	ItemsFound        int64   `json:"items_found"`
+	ItemsInserted     int64   `json:"items_inserted"`
+	ItemsUpdated      int64   `json:"items_updated"`
+	ItemsWrong        int64   `json:"items_wrong"`
+	ItemsUnverifiable int64   `json:"items_unverifiable"`
+	DryRun            bool    `json:"dry_run"`
+	ErrorText         *string `json:"error_text"`
+}
+
+// RunListResponse is the GET /api/runs envelope. It mirrors ListResponse rather
+// than sharing it, because the item shape differs.
+type RunListResponse struct {
+	Runs   []RunListItem `json:"runs"`
+	Limit  int           `json:"limit"`
+	Offset int           `json:"offset"`
+	Total  int64         `json:"total"`
+}
