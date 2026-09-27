@@ -123,6 +123,30 @@ func ScrapeCompanyBySlug(ctx context.Context, q Querier, slug string) (ScrapeCom
 	return c, nil
 }
 
+// CompanySlugByID returns the slug for a company id, or sql.ErrNoRows.
+func CompanySlugByID(ctx context.Context, q Querier, id int64) (string, error) {
+	var slug string
+	if err := q.QueryRowContext(ctx, `SELECT slug FROM companies WHERE id = ?`, id).Scan(&slug); err != nil {
+		return "", err
+	}
+	return slug, nil
+}
+
+// VendorNameForCompany returns the classified ATS vendor name for a company, or sql.ErrNoRows when
+// the company has not been classified yet (no company_application_platforms row).
+func VendorNameForCompany(ctx context.Context, q Querier, companyID int64) (string, error) {
+	var name string
+	err := q.QueryRowContext(ctx, `
+SELECT p.name
+  FROM company_application_platforms cap
+  JOIN platforms p ON p.id = cap.platform_id
+ WHERE cap.company_id = ?`, companyID).Scan(&name)
+	if err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
 // PlatformIDByName returns the platforms id for a vendor name, or sql.ErrNoRows when unknown.
 func PlatformIDByName(ctx context.Context, q Querier, name string) (int64, error) {
 	var id int64

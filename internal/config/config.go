@@ -61,6 +61,11 @@ type Config struct {
 	BrowserUseEnabled bool
 	// BrowserUseCommand is the worker invocation, whitespace-split, run without a shell.
 	BrowserUseCommand string
+	// ScrapeCommand is the invocation the server uses to launch one company's listings scrape,
+	// whitespace-split, run without a shell (e.g. "./bin/scrape" or "go run ./cmd/scrape"). Empty
+	// means the POST trigger is disabled: the server reports it is not configured rather than
+	// guessing a command.
+	ScrapeCommand string
 	// BrowserUseModel is the Ollama model tag for the escalation tier.
 	BrowserUseModel string
 	// OllamaHost is the Ollama base URL the worker talks to. Empty means the worker's own default,
@@ -88,6 +93,7 @@ func Load() (Config, error) {
 		BrowserUseCommand: envOrDefault("BROWSER_WORKER_COMMAND", DefaultBrowserUseCommand),
 		BrowserUseModel:   envOrDefault("BROWSER_USE_MODEL", DefaultBrowserUseModel),
 		OllamaHost:        strings.TrimSuffix(envOrDefault("OLLAMA_HOST", ""), "/"),
+		ScrapeCommand:     envOrDefault("SCRAPE_COMMAND", ""),
 	}
 
 	// ENABLE_BROWSER_USE is parsed rather than merely tested for emptiness: "ENABLE_BROWSER_USE=0"

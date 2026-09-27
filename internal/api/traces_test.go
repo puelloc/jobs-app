@@ -20,7 +20,7 @@ func newTraceTestServer(t *testing.T) (http.Handler, string) {
 	}
 	t.Cleanup(func() { _ = database.Close() })
 	dir := t.TempDir()
-	return NewRouter(database, dir), dir
+	return NewRouter(database, dir, []string{"true"}), dir
 }
 
 func TestGetTrace_ReturnsEvents(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -47,9 +48,11 @@ func run() int {
 	}
 	defer database.Close()
 
+	scrapeCmd := strings.Fields(cfg.ScrapeCommand)
+
 	srv := &http.Server{
 		Addr:              cfg.ServerAddr,
-		Handler:           api.NewRouter(database, cfg.DataDir),
+		Handler:           api.NewRouter(database, cfg.DataDir, scrapeCmd),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
