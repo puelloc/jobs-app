@@ -57,6 +57,20 @@ type Candidate struct {
 	// Source names the tier that produced it, for the audit trail: "nav_anchor", "robots_sitemap",
 	// "path_heuristic", "wikidata", "ats_api", "browser_use".
 	Source string
+	// RequireJobListingEvidence selects the validation profile rather than the discovery profile.
+	//
+	// The default rules are generous on purpose, and that generosity is only safe while the URL was
+	// proposed by a tier that had already looked for a careers page: a navigation link labelled
+	// "Careers", a sitemap entry, a JSON-LD block. A validation pass judges a URL that was chosen by
+	// some earlier run and may be anything at all, so "a path segment containing job" stops being a
+	// hint and becomes a false positive - it accepts a stock-quote page for the ticker JOB, a brush
+	// cutter called JobStar, and a route page at .../routes/joinville-le-pont-... because "join"
+	// matches. Measured on the first full browser sweep: 14 of the 54 pages the earlier census
+	// called wrong were accepted by the generous rules.
+	//
+	// When set, an HTML page is accepted only on evidence that it is a job listing or a careers
+	// landing page, and pages whose own title or path names another kind of page are rejected first.
+	RequireJobListingEvidence bool
 }
 
 // Response is what the caller observed when it fetched a Candidate.
@@ -270,6 +284,15 @@ func validateHTML(v Verdict, c Candidate, r Response) Verdict {
 		return v
 	}
 
+	// The validation profile takes over here, after the hard rejections above have had their say.
+	// It is restricted to first-party careers pages: a third-party board's rules are already
+	// stricter (the company token is the whole of the evidence) and a board URL is by construction a
+	// job listing, so re-judging it by listing evidence would reject real boards for being rendered
+	// as a shell.
+	if c.RequireJobListingEvidence && c.Kind == KindCareerSite {
+		return validateJobListing(v, c, body)
+	}
+
 	jobPostings := countJobPostings(body)
 	evidence := []string{}
 	if jobPostings > 0 {
@@ -297,6 +320,218 @@ func validateHTML(v Verdict, c Candidate, r Response) Verdict {
 	v.Status = StatusAccepted
 	v.Reason = OutcomeHTMLCareers
 	return v
+}
+
+// validateJobListing applies the validation profile: is this page a job listing, or a careers
+// landing page, or something else entirely?
+//
+// The order matters and is the same reasoning as the hard rejections above. A page that names itself
+// as another kind of page is rejected on that name alone, before any careers-shaped hint is
+// consulted, because the hints are weak: "opportunities" appears in "Supplier Opportunities",
+// "employment" in "Employment Fraud Alert", "job" inside "JobStar". Each of those was accepted by
+// the generous profile on the strength of the matching substring.
+func validateJobListing(v Verdict, c Candidate, body string) Verdict {
+	heading := documentHeading(body)
+	named := strings.ToLower(v.Title + " " + heading)
+
+	if marker := firstMarker(named, nonCareersPageMarkers); marker != "" {
+		v.Status = StatusRejected
+		v.Reason = OutcomeProductOrInvestorPath
+		v.Evidence = "page_kind=" + marker
+		return v
+	}
+	if token := firstPathToken(v.FinalURL); token != "" {
+		v.Status = StatusRejected
+		v.Reason = OutcomeProductOrInvestorPath
+		v.Evidence = "path_kind=" + token
+		return v
+	}
+
+	// Strong evidence: the page actually lists work.
+	jobPostings := countJobPostings(body)
+	links := countJobListingLinks(body)
+	phrase := hasOpeningsPhrase(body)
+	evidence := []string{}
+	if jobPostings > 0 {
+		evidence = append(evidence, fmt.Sprintf("jobposting=%d", jobPostings))
+	}
+	if phrase {
+		evidence = append(evidence, "openings_phrase")
+	}
+	if links >= jobListingLinkThreshold {
+		evidence = append(evidence, fmt.Sprintf("job_links=%d", links))
+	}
+
+	// Weaker, but still real: the company's own careers landing page. It is careers-shaped in its URL
+	// or host, it says careers in its own heading, and it names the company.
+	//
+	// Known limitation, deliberate: this refuses a landing page whose <title> omits the company name
+	// when the company's own token is a descriptor rather than a brand - "Amneal Pharmaceuticals,
+	// Inc." yields "pharmaceuticals" from distinctiveToken, which appears in neither the title
+	// ("Join Us in Making Medicines Accessible") nor the host (amneal.com). Accepting on the host
+	// alone was tried and reverted: it re-admitted an Amgen news article whose slug happens to contain
+	// "employment". For a validator, a false negative leaves a URL unconfirmed and re-checkable, while
+	// a false positive publishes a wrong page as verified - so the strict arm is the one to keep.
+	if len(evidence) == 0 &&
+		careersShapedLocation(v.FinalURL) &&
+		(hasCareersSignal(v.Title+" "+heading) || hasCareersSegment(v.FinalURL)) &&
+		containsCompanyToken(v.Title+" "+heading, c.CompanyName) &&
+		distinctiveToken(c.CompanyName) != "" {
+		evidence = append(evidence, "careers_landing")
+	}
+
+	v.Evidence = strings.Join(evidence, ",")
+	if len(evidence) == 0 {
+		v.Status = StatusRejected
+		v.Reason = OutcomeNoCareersSignal
+		return v
+	}
+	v.Status = StatusAccepted
+	v.Reason = OutcomeHTMLCareers
+	return v
+}
+
+// nonCareersPageMarkers are phrases that name a page as something other than a place that lists
+// work. They are matched against the title and the first heading only, never the body: an
+// equal-opportunity statement is boilerplate *on* most real careers pages, so a body match would
+// reject the pages it is meant to protect. The pages this catches say it in their own title, which
+// is exactly how the earlier census named them.
+var nonCareersPageMarkers = []string{
+	"equal opportunity", "equal housing", "fraud alert", "supplier opportunit",
+	"partner with", "license agreement", "privacy policy", "terms of use",
+	"press release", "media contact",
+}
+
+// hardNonCareersPathTokens name a content type that is not a job listing whatever the page happens to
+// be about: a students page, a story, a blog post, a product page, a route. A careers word elsewhere
+// in the segment does not change what the section is, so these are checked before the rescue below -
+// "students-learn-about-stem-careers-at-masco" is an article, not a careers page.
+var hardNonCareersPathTokens = []string{
+	"blog", "news", "press", "article", "stories", "product", "route", "student",
+}
+
+// softNonCareersPathTokens name a subject that can legitimately be part of a careers section.
+// "culture-and-careers" is ADM's real careers entry point and "culture-and-careers" is LKQ's, so a
+// soft token is skipped when the same segment also names careers.
+var softNonCareersPathTokens = []string{
+	"award", "recognition", "benefit", "culture", "diversity", "inclusion", "event",
+	"graduate", "learning", "supplier", "partner", "campus",
+}
+
+// jobListingLinkThreshold is how many links to individual postings a page must carry before its link
+// count counts as evidence on its own. A real board or listing page has dozens; a news article, a
+// product page and an EEO statement have none, and a page with two or three is more likely to be a
+// careers *mention* than a careers page.
+const jobListingLinkThreshold = 5
+
+// jobListingLinkRE matches an href that points at a posting, a job search, or a known applicant
+// system. It is deliberately about the href rather than any occurrence of the word, so body prose
+// about hiring does not count.
+var jobListingLinkRE = regexp.MustCompile(`(?i)href\s*=\s*["'][^"']*(?:/jobs?/|/jobs?["'?#]|/positions?/|/openings?/|/apply[/"'?#]|/careers?/|/vacanc|jobs\.|myworkdayjobs|greenhouse\.io|lever\.co|ashbyhq|icims|taleo|successfactors|eightfold|phenom)`)
+
+func countJobListingLinks(body string) int { return len(jobListingLinkRE.FindAllString(body, -1)) }
+
+// firstMarker returns the first marker present in haystack, or "" when none is.
+func firstMarker(haystack string, markers []string) string {
+	for _, m := range markers {
+		if strings.Contains(haystack, m) {
+			return m
+		}
+	}
+	return ""
+}
+
+// firstPathToken returns the first token matched by any path segment, or "" when none is.
+func firstPathToken(raw string) string {
+	u, err := parseURL(raw)
+	if err != nil {
+		return ""
+	}
+	for _, segment := range strings.Split(strings.ToLower(u.Path), "/") {
+		if segment == "" {
+			continue
+		}
+		if token := matchAnyToken(segment, hardNonCareersPathTokens); token != "" {
+			return token
+		}
+		// A segment that names careers is a careers section however else it reads: ADM's
+		// "culture-and-careers" would otherwise be rejected by the "culture" token, which is a real
+		// careers page being called a wrong one - the opposite of the error this profile exists to
+		// prevent, and just as damaging.
+		if containsCareersWord(segment) {
+			continue
+		}
+		if token := matchAnyToken(segment, softNonCareersPathTokens); token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
+// matchAnyToken returns the first token contained in segment, or "".
+func matchAnyToken(segment string, tokens []string) string {
+	for _, token := range tokens {
+		if strings.Contains(segment, token) {
+			return token
+		}
+	}
+	return ""
+}
+
+// containsCareersWord reports whether a single path segment, host, or title names careers.
+func containsCareersWord(s string) bool {
+	lower := strings.ToLower(s)
+	for _, token := range []string{"career", "job", "join", "employment", "opportunit", "hiring", "vacanc"} {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
+}
+
+// careersSegmentWords are whole path segments that name a careers section. They are matched as a
+// whole segment, or as a prefix followed by a separator, and never as a bare substring: "join" must
+// not match "Joinville" and "employment" must not match
+// "national-disability-employment-awareness", while "careers" matches "/de/careers".
+// careersSegmentPrefixWords may be followed by a separator and more text: "careers-home" and
+// "job-1234" are sections and postings.
+var careersSegmentPrefixWords = []string{
+	"careers", "career", "jobs", "job", "vacancies", "vacancy",
+	// The same section, in the language the company publishes it in. A URL segment is a much more
+	// stable signal than a translated page title: Coherent's /de/careers is an English path on a
+	// German page.
+	"karriere", "carrieres", "carrières", "empleos", "emplois", "stellenangebote", "vacatures",
+}
+
+// careersSegmentExactWords must match the whole segment. Allowing them a suffix is what accepted a
+// dealer-network page at /dealers/join-our-network and a product dashboard at
+// /solutions/opportunity-dashboard: the words are right, the sections are not careers.
+var careersSegmentExactWords = []string{
+	"join", "join-us", "joinus", "work-with-us", "employment", "opportunities", "opportunity", "hiring",
+}
+
+// hasCareersSegment reports whether any path segment is a careers section by name.
+func hasCareersSegment(raw string) bool {
+	u, err := parseURL(raw)
+	if err != nil {
+		return false
+	}
+	for _, segment := range strings.Split(strings.ToLower(u.Path), "/") {
+		if segment == "" {
+			continue
+		}
+		for _, word := range careersSegmentPrefixWords {
+			if segment == word || strings.HasPrefix(segment, word+"-") || strings.HasPrefix(segment, word+"_") {
+				return true
+			}
+		}
+		for _, word := range careersSegmentExactWords {
+			if segment == word {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // validateATSJSON applies the rules for an applicant-tracking board's JSON API.
@@ -385,6 +620,8 @@ var challengeMarkers = []string{
 	"cf_chl_",
 	"verifying you are human",
 	"verify you are human",
+	"human verification",
+	"are you a robot",
 	"checking if the site connection is secure",
 	"needs to review the security of your connection",
 	"ddos protection by cloudflare",
@@ -396,6 +633,7 @@ var challengeMarkers = []string{
 	// block page: Akamai's "Access Denied", ZoomInfo's longer form, and a host error page.
 	"access denied",
 	"access to this page has been denied",
+	"client challenge",
 	"site temporarily unavailable",
 	"unusual traffic",
 }

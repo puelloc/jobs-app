@@ -1,0 +1,19 @@
+-- 012_attempt_evidence.sql: give url_resolution_attempts the evidence summary it was already
+-- carrying in Go.
+--
+-- store.ResolutionAttempt has had an Evidence field since 007, and both the resolution ladder and
+-- the browser validator populate it with the reason a verdict was reached: the accepted verdict
+-- kind, the parsed signal counts, and - for an escalated company - the navigating agent's own
+-- reasoning about where it went and why. None of it was ever written, because the INSERT predates
+-- the field and lists its columns explicitly. The values were computed, passed down, and dropped at
+-- the boundary.
+--
+-- That is the plan's silent-aggregation family in a different dress: not a counter measuring the
+-- wrong thing, but a field that looks recorded and is not. It stayed invisible until a sweep's
+-- acceptances had to be explained, at which point the explanation existed nowhere.
+--
+-- Free text rather than a fixed vocabulary on purpose. Unlike rejection_reason, which is queried by
+-- value and must stay closed, this column is a diagnostic summary read by a human: "verdict=html_careers;
+-- jobposting=12" or "note=<the agent's reasoning>". Bounding it is the caller's job (see
+-- runvalidate.noteEvidenceLimit).
+ALTER TABLE url_resolution_attempts ADD COLUMN evidence TEXT;

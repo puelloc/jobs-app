@@ -1,0 +1,7 @@
+# Pinned deliberately, not for fashion.
+#
+# playwright==1.58.0 is the version whose Chromium revision (1208) is already present in the
+# shared ms-playwright cache. Any other version makes the worker download a browser, which a
+# sandboxed run cannot do and a batch run should not need to.
+playwright==1.58.0
+browser-use==0.13.10

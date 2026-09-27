@@ -70,10 +70,12 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		switch args[0] {
 		case "resolve":
 			return runResolve(args[1:], stdout, stderr)
+		case "validate":
+			return runValidate(args[1:], stdout, stderr)
 		case "indices":
 			return run()
 		case "-h", "--help", "help":
-			fmt.Fprintln(stderr, "usage: sp1500 [indices|resolve] [flags]")
+			fmt.Fprintln(stderr, "usage: sp1500 [indices|resolve|validate] [flags]")
 			return exitOK
 		default:
 			fmt.Fprintf(stderr, "status=error step=config err=%q\n", "unknown subcommand "+singleLine(args[0]))

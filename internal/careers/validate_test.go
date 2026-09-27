@@ -696,3 +696,334 @@ func TestNormaliseURLIsIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// --- the validation profile (RequireJobListingEvidence) --------------------
+//
+// Every case below is a page the first full browser sweep actually accepted with the generous
+// profile, and the earlier hand census had already named as a wrong pick. They are recorded as
+// fixtures rather than invented, because the whole failure was that plausible-looking substrings
+// ("JobStar", "Joinville", "Supplier Opportunities") read as careers evidence.
+
+func strictCareerCandidate(url, company string) Candidate {
+	return Candidate{
+		URL:                       url,
+		Kind:                      KindCareerSite,
+		CompanyName:               company,
+		Source:                    "browser_use",
+		RequireJobListingEvidence: true,
+	}
+}
+
+func TestValidationProfileRejectsPagesTheGenerousProfileAccepts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		company string
+		url     string
+		title   string
+		body    string
+	}{
+		{
+			name:    "a product page whose name contains job",
+			company: "PriceSmart, Inc.",
+			url:     "https://www.pricesmart.com/en/catalogsearch/result/?q=JobStar",
+			title:   "JobStar 2-in-1 Brush Cutter and Trimmer 42.7 cc",
+			body:    `<html><head><title>JobStar 2-in-1 Brush Cutter and Trimmer 42.7 cc</title></head><body><h1>JobStar</h1><p>Add to cart</p></body></html>`,
+		},
+		{
+			name:    "a route page whose path contains join",
+			company: "Uber Technologies, Inc.",
+			url:     "https://www.uber.com/global/en/routes/joinville-le-pont-idf-fr-to-ory/",
+			title:   "Joinville-Le-Pont - Aéroport d'Orly (ORY)",
+			body:    `<html><head><title>Joinville-Le-Pont - Aéroport d'Orly (ORY)</title></head><body><h1>Joinville-Le-Pont</h1></body></html>`,
+		},
+		{
+			name:    "a product detail page whose path contains jobs",
+			company: "Dynatrace, Inc.",
+			url:     "https://www.dynatrace.com/hub/detail/control-m-jobs-v2/",
+			title:   "Control-M monitoring &amp; observability",
+			body:    `<html><head><title>Control-M monitoring</title></head><body><h1>Control-M</h1></body></html>`,
+		},
+		{
+			name:    "an employment fraud alert",
+			company: "QUALCOMM Incorporated",
+			url:     "https://www.qualcomm.com/company/careers/employment-fraud-alert",
+			title:   "Employment Fraud Alert | Qualcomm",
+			body:    `<html><head><title>Employment Fraud Alert | Qualcomm</title></head><body><h1>Employment Fraud Alert</h1></body></html>`,
+		},
+		{
+			name:    "a supplier programme page",
+			company: "Humana Inc.",
+			url:     "https://www.humana.com/supplier-opportunities",
+			title:   "Supplier Opportunities - Types of Business Partners",
+			body:    `<html><head><title>Supplier Opportunities</title></head><body><h1>Supplier Opportunities</h1></body></html>`,
+		},
+		{
+			name:    "an equal opportunity statement",
+			company: "Fiserv, Inc.",
+			url:     "https://www.fiserv.com/en/about-fiserv/careers/equal-opportunity.html",
+			title:   "Equal Opportunity | Fiserv",
+			body:    `<html><head><title>Equal Opportunity | Fiserv</title></head><body><h1>Equal Opportunity</h1></body></html>`,
+		},
+		{
+			name:    "a partner marketing page",
+			company: "WEX Inc.",
+			url:     "https://www.wexinc.com/partner-with-wex/",
+			title:   "Partner With WEX | Payments Technology",
+			body:    `<html><head><title>Partner With WEX</title></head><body><h1>Partner With WEX</h1></body></html>`,
+		},
+		{
+			name:    "a news article that mentions employment",
+			company: "Amgen Inc.",
+			url:     "https://www.amgen.com/stories/2026/09/national-disability-employment-awareness",
+			title:   "Recognizing National Disability Employment Awareness Month",
+			body:    `<html><head><title>Recognizing National Disability Employment Awareness Month</title></head><body><h1>Our stories</h1></body></html>`,
+		},
+		{
+			name:    "a careers sub-page that is not a listing",
+			company: "United Therapeutics Corporation",
+			url:     "https://www.unither.com/careers/awards-and-recognitions",
+			title:   "United Therapeutics Careers | Awards &amp; Recognition",
+			body:    `<html><head><title>United Therapeutics Careers | Awards &amp; Recognition</title></head><body><h1>Awards &amp; Recognition</h1></body></html>`,
+		},
+		{
+			name:    "a news article whose headline contains careers",
+			company: "Masco Corporation",
+			url:     "https://masco.com/students-learn-about-stem-careers-at-masco/",
+			title:   "Students Learn about STEM Careers at Masco - Masco",
+			body:    `<html><head><title>Students Learn about STEM Careers at Masco</title></head><body><h1>Students Learn about STEM Careers at Masco</h1></body></html>`,
+		},
+		{
+			name:    "a product dashboard one segment away from opportunity",
+			company: "Cencora, Inc.",
+			url:     "https://www.cencora.com/solutions/opportunity-dashboard",
+			title:   "Opportunity Dashboard for ABC Order | Cencora",
+			body:    `<html><head><title>Opportunity Dashboard for ABC Order | Cencora</title></head><body><h1>Opportunity Dashboard</h1></body></html>`,
+		},
+		{
+			name:    "a dealer network sign-up whose path starts with join",
+			company: "Credit Acceptance Corporation",
+			url:     "https://www.creditacceptance.com/dealers/join-our-network",
+			title:   "Join Our Dealer Network | Credit Acceptance",
+			body:    `<html><head><title>Join Our Dealer Network | Credit Acceptance</title></head><body><h1>Join Our Dealer Network</h1></body></html>`,
+		},
+		{
+			name:    "a careers blog category",
+			company: "PPL Corporation",
+			url:     "https://www.pplweb.com/blog/category/careers/",
+			title:   "Careers | PPL Corporation",
+			body:    `<html><head><title>Careers | PPL Corporation</title></head><body><h1>Careers</h1><p>Blog</p></body></html>`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			verdict := Validate(strictCareerCandidate(tc.url, tc.company), Response{
+				FinalURL:    tc.url,
+				Status:      200,
+				ContentType: "text/html; charset=utf-8",
+				Body:        []byte(tc.body),
+			})
+			if verdict.Accepted() {
+				t.Fatalf("accepted %q as a careers page (evidence %q); the validation profile exists to refuse exactly this",
+					tc.title, verdict.Evidence)
+			}
+			if verdict.Status != StatusRejected {
+				t.Errorf("status = %q, want rejected", verdict.Status)
+			}
+		})
+	}
+}
+
+func TestValidationProfileAcceptsRealJobListingsAndLandingPages(t *testing.T) {
+	listings := `<html><head><title>Careers | Example Corp</title>
+<script type="application/ld+json">{"@type":"JobPosting"}</script></head>
+<body><h1>Open positions</h1>
+<a href="/jobs/1234">Senior Engineer</a><a href="/jobs/1235">Designer</a>
+<a href="/jobs/1236">Analyst</a><a href="/jobs/1237">Manager</a><a href="/jobs/1238">Writer</a>
+</body></html>`
+
+	landing := `<html><head><title>Careers | Example Corp</title></head><body><h1>Careers</h1><p>Find your next role.</p></body></html>`
+
+	for _, tc := range []struct {
+		name string
+		url  string
+		body string
+	}{
+		{"a job listing with JSON-LD and links", "https://example.com/careers", listings},
+		{"a branded careers landing page that names the company", "https://careers.example.com/", landing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			verdict := Validate(strictCareerCandidate(tc.url, "Example Corp"), Response{
+				FinalURL:    tc.url,
+				Status:      200,
+				ContentType: "text/html; charset=utf-8",
+				Body:        []byte(tc.body),
+			})
+			if !verdict.Accepted() {
+				t.Fatalf("rejected a real careers page: status=%q reason=%q", verdict.Status, verdict.Reason)
+			}
+			if verdict.Evidence == "" {
+				t.Error("an acceptance must carry the evidence that justified it")
+			}
+		})
+	}
+}
+
+// The profile must not weaken the discovery path. The same product page that the validation profile
+// refuses is still accepted by the generous rules when a tier proposes it, because there the URL
+// came with a careers-shaped anchor or sitemap entry that the validator does not have.
+func TestGenerousProfileIsUnchangedByTheValidationProfile(t *testing.T) {
+	candidate := Candidate{
+		URL:         "https://www.qualcomm.com/company/careers/employment-fraud-alert",
+		Kind:        KindCareerSite,
+		CompanyName: "QUALCOMM Incorporated",
+		Source:      "nav_anchor",
+	}
+	body := []byte(`<html><head><title>Employment Fraud Alert | Qualcomm</title></head><body><h1>Employment Fraud Alert</h1></body></html>`)
+	verdict := Validate(candidate, Response{
+		FinalURL: candidate.URL, Status: 200, ContentType: "text/html", Body: body,
+	})
+	if verdict.Reason != OutcomeHTMLCareers {
+		t.Errorf("reason = %q, want %q: the discovery profile's behaviour must not change",
+			verdict.Reason, OutcomeHTMLCareers)
+	}
+}
+
+// A page that refuses to describe itself as a bot wall is an unknown, not a wrong URL, and the
+// validation profile must not relabel it as a rejection.
+func TestValidationProfileLeavesBotWallsAsUnknowns(t *testing.T) {
+	verdict := Validate(strictCareerCandidate("https://www.morningstar.com/stocks/xase/job/quote", "Morningstar, Inc."), Response{
+		FinalURL:    "https://www.morningstar.com/stocks/xase/job/quote",
+		Status:      202,
+		ContentType: "text/html; charset=utf-8",
+		Body:        []byte(`<html><head><title>Human Verification</title></head><body>Checking your browser</body></html>`),
+	})
+	if verdict.Reason != OutcomeBotChallenge {
+		t.Fatalf("reason = %q, want %q", verdict.Reason, OutcomeBotChallenge)
+	}
+	if verdict.Status != StatusRejected {
+		t.Errorf("status = %q, want rejected", verdict.Status)
+	}
+}
+
+// A pinned limitation, not desired behaviour: a landing page on the company's own host whose title
+// omits the company name is refused when the company's distinctive token is a descriptor. Amneal's
+// token is "pharmaceuticals", which is in neither the title nor the host. This is the conservative
+// direction on purpose - a URL left unconfirmed can be re-checked, a wrong page published as verified
+// cannot - but it is recorded here so the next reader knows the count of "wrong" includes this shape.
+func TestValidationProfileKnownLimitationLandingPageWithoutTheCompanyTokenInItsTitle(t *testing.T) {
+	verdict := Validate(strictCareerCandidate("https://www.amneal.com/join-us", "Amneal Pharmaceuticals, Inc."), Response{
+		FinalURL:    "https://www.amneal.com/join-us",
+		Status:      200,
+		ContentType: "text/html; charset=utf-8",
+		Body:        []byte(`<html><head><title>Join Us in Making Medicines Accessible</title></head><body><h1>Join Us</h1></body></html>`),
+	})
+	if verdict.Accepted() {
+		t.Fatalf("this fixture documents a known false negative; if the rule changed, update the note")
+	}
+	if verdict.Reason != OutcomeNoCareersSignal {
+		t.Errorf("reason = %q, want %q", verdict.Reason, OutcomeNoCareersSignal)
+	}
+}
+
+// The host arm must not resurrect the route-page false positive: a careers-shaped *substring* in the
+// path ("join" inside "Joinville") with no careers word in the page's own title is still refused.
+func TestValidationProfileStillRefusesARoutePageOnTheCompanyHost(t *testing.T) {
+	verdict := Validate(strictCareerCandidate(
+		"https://www.uber.com/global/en/routes/joinville-le-pont-idf-fr-to-ory/",
+		"Uber Technologies, Inc."), Response{
+		FinalURL:    "https://www.uber.com/global/en/routes/joinville-le-pont-idf-fr-to-ory/",
+		Status:      200,
+		ContentType: "text/html; charset=utf-8",
+		Body:        []byte(`<html><head><title>Joinville-Le-Pont - Aéroport d'Orly (ORY)</title></head><body><h1>Joinville-Le-Pont</h1></body></html>`),
+	})
+	if verdict.Accepted() {
+		t.Fatalf("accepted a route page because its host names the company: evidence=%q", verdict.Evidence)
+	}
+}
+
+// A path segment that names careers is a careers path however else it reads. ADM's real entry point is
+// /en-us/culture-and-careers/join-team-adm/, and the "culture" token was calling it a wrong page -
+// the opposite error, and just as damaging to the measurement.
+func TestValidationProfileAcceptsACareersPathThatContainsANonCareersWord(t *testing.T) {
+	url := "https://www.adm.com/en-us/culture-and-careers/join-team-adm/"
+	verdict := Validate(strictCareerCandidate(url, "Archer-Daniels-Midland Company"), Response{
+		FinalURL:    url,
+		Status:      200,
+		ContentType: "text/html; charset=utf-8",
+		Body:        []byte(`<html><head><title>ADM Job Openings | ADM</title></head><body><h1>Join our team</h1></body></html>`),
+	})
+	if !verdict.Accepted() {
+		t.Fatalf("rejected a careers page whose path contains 'culture': reason=%q evidence=%q",
+			verdict.Reason, verdict.Evidence)
+	}
+}
+
+// A bot wall that calls itself a "Client Challenge" answered with a page we could not read. It is an
+// unknown, never a proven wrong URL.
+func TestValidationProfileTreatsAClientChallengeAsABotWall(t *testing.T) {
+	verdict := Validate(strictCareerCandidate("https://www.arista.com/en/careers", "Arista Networks, Inc."), Response{
+		FinalURL:    "https://www.arista.com/en/careers",
+		Status:      200,
+		ContentType: "text/html; charset=utf-8",
+		Body:        []byte(`<html><head><title>Client Challenge</title></head><body>Enable JavaScript and cookies to continue</body></html>`),
+	})
+	if verdict.Reason != OutcomeBotChallenge {
+		t.Fatalf("reason = %q, want %q", verdict.Reason, OutcomeBotChallenge)
+	}
+}
+
+// A careers page published in another language is still a careers page when its URL says so. The
+// title "Arbeiten bei Coherent" carries no English careers word at all.
+func TestValidationProfileAcceptsATranslatedCareersPageByItsPathSegment(t *testing.T) {
+	url := "https://www.coherent.com/de/careers"
+	verdict := Validate(strictCareerCandidate(url, "Coherent Corp."), Response{
+		FinalURL:    url,
+		Status:      200,
+		ContentType: "text/html; charset=utf-8",
+		Body:        []byte(`<html><head><title>Arbeiten bei Coherent | Coherent</title></head><body><h1>Arbeiten bei Coherent</h1></body></html>`),
+	})
+	if !verdict.Accepted() {
+		t.Fatalf("rejected a translated careers page: reason=%q", verdict.Reason)
+	}
+}
+
+// The segment rule must stay a segment rule. "Joinville" starts with "join" but is not a careers
+// section, and the Amgen article's slug contains "employment" mid-word.
+func TestCareersSegmentDoesNotMatchSubstrings(t *testing.T) {
+	for _, url := range []string{
+		"https://www.uber.com/global/en/routes/joinville-le-pont-idf-fr-to-ory/",
+		"https://www.amgen.com/stories/2026/09/national-disability-employment-awareness",
+		"https://www.dynatrace.com/hub/detail/control-m-jobs-v2/",
+	} {
+		if hasCareersSegment(url) {
+			t.Errorf("hasCareersSegment(%q) = true, want false", url)
+		}
+	}
+	for _, url := range []string{
+		"https://www.coherent.com/de/careers",
+		"https://example.com/jobs/1234",
+		"https://example.com/careers-home",
+	} {
+		if !hasCareersSegment(url) {
+			t.Errorf("hasCareersSegment(%q) = false, want true", url)
+		}
+	}
+	// A whole segment that merely contains a careers word is not a careers section: ADM's
+	// "culture-and-careers" is accepted through the title signal and the soft-token rescue, not here.
+	if hasCareersSegment("https://www.adm.com/en-us/culture-and-careers/join-team-adm/") {
+		t.Error("hasCareersSegment matched a segment that only contains a careers word")
+	}
+}
+
+// A news section is not a job listing, whatever the article is about.
+func TestValidationProfileRefusesANewsArticleUnderAStoriesSection(t *testing.T) {
+	url := "https://www.amgen.com/stories/2026/09/national-disability-employment-awareness"
+	verdict := Validate(strictCareerCandidate(url, "Amgen Inc."), Response{
+		FinalURL:    url,
+		Status:      200,
+		ContentType: "text/html; charset=utf-8",
+		Body:        []byte(`<html><head><title>Recognizing National Disability Employment Awareness Month</title></head><body><h1>Amgen Stories</h1></body></html>`),
+	})
+	if verdict.Accepted() {
+		t.Fatalf("accepted a news article: evidence=%q", verdict.Evidence)
+	}
+}
