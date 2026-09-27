@@ -871,3 +871,102 @@ func TestDryRunLeavesCompanyUnchanged(t *testing.T) {
 		t.Errorf("company_application_platforms rows = %d, want 0 after a dry run", platforms)
 	}
 }
+
+// --- validation verdicts (migration 010) ----------------------------------
+
+// The verdict vocabulary is closed, like the rejection reasons: the column is queried by value and a
+// typo stored as free text is a value nothing will ever match.
+func TestUndeclaredValidationVerdictIsRefused(t *testing.T) {
+	database := newTestDB(t)
+	seedCompany(t, database, 1, "acme")
+	writer := NewResolutionWriter(database, "")
+	runID := resolutionTestRun(t, database)
+
+	_, err := writer.Write(context.Background(), runID, 0, Resolution{
+		CompanyID:            1,
+		CompanySlug:          "acme",
+		CareerSiteVerdict:    "probably-fine",
+		CareerSiteVerdictURL: "https://acme.example/careers",
+		Attempts:             []ResolutionAttempt{acceptedAttempt("https://acme.example/careers")},
+	})
+	if err == nil {
+		t.Fatal("an undeclared verdict was written")
+	}
+	if !strings.Contains(err.Error(), "verdict") {
+		t.Errorf("error = %q, want it to name the verdict", err)
+	}
+}
+
+func TestValidationVerdictLandsOnTheCompanyRowWithItsRun(t *testing.T) {
+	database := newTestDB(t)
+	seedCompany(t, database, 1, "acme")
+	writer := NewResolutionWriter(database, "")
+	runID := resolutionTestRun(t, database)
+
+	if _, err := writer.Write(context.Background(), runID, 0, Resolution{
+		CompanyID:            1,
+		CompanySlug:          "acme",
+		CareerSiteVerdict:    "wrong",
+		CareerSiteVerdictURL: "https://acme.example/x",
+		Attempts:             []ResolutionAttempt{rejectedAttempt("https://acme.example/x", careers.OutcomeNoCareersSignal)},
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	var verdict string
+	var verdictAt string
+	var verdictRun int64
+	if err := database.QueryRow(
+		`SELECT career_site_url_verdict, career_site_url_verdict_at, career_site_url_verdict_run_id FROM companies WHERE id = 1`).
+		Scan(&verdict, &verdictAt, &verdictRun); err != nil {
+		t.Fatalf("read verdict: %v", err)
+	}
+	if verdict != "wrong" || verdictRun != runID {
+		t.Errorf("verdict = %q run = %d, want wrong/%d", verdict, verdictRun, runID)
+	}
+	if verdictAt == "" {
+		t.Error("career_site_url_verdict_at was not stamped")
+	}
+}
+
+// A resolution run produces a URL rather than judging one. It must leave an earlier validation's
+// verdict standing: clearing it would silently erase the only record of what the last check found.
+func TestAResolutionWriteLeavesAnEarlierVerdictIntact(t *testing.T) {
+	database := newTestDB(t)
+	seedCompany(t, database, 1, "acme")
+	writer := NewResolutionWriter(database, "")
+
+	validationRun := resolutionTestRun(t, database)
+	if _, err := writer.Write(context.Background(), validationRun, 0, Resolution{
+		CompanyID:            1,
+		CompanySlug:          "acme",
+		CareerSiteVerdict:    "confirmed",
+		CareerSiteVerdictURL: "https://acme.example/careers",
+		Attempts:             []ResolutionAttempt{acceptedAttempt("https://acme.example/careers")},
+	}); err != nil {
+		t.Fatalf("write validation: %v", err)
+	}
+
+	resolutionRun := resolutionTestRun(t, database)
+	if _, err := writer.Write(context.Background(), resolutionRun, 0, Resolution{
+		CompanyID:        1,
+		CompanySlug:      "acme",
+		CareerSiteURL:    "https://acme.example/company/careers",
+		CareerSiteSource: CareerSiteSourceAnchorScan,
+		Attempts:         []ResolutionAttempt{acceptedAttempt("https://acme.example/company/careers")},
+	}); err != nil {
+		t.Fatalf("write resolution: %v", err)
+	}
+
+	var verdict string
+	var verdictRun int64
+	if err := database.QueryRow(
+		`SELECT career_site_url_verdict, career_site_url_verdict_run_id FROM companies WHERE id = 1`).
+		Scan(&verdict, &verdictRun); err != nil {
+		t.Fatalf("read verdict: %v", err)
+	}
+	if verdict != "confirmed" || verdictRun != validationRun {
+		t.Errorf("verdict = %q run = %d, want confirmed/%d left by the validation run",
+			verdict, verdictRun, validationRun)
+	}
+}

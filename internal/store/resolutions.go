@@ -73,6 +73,17 @@ type Resolution struct {
 	CareerSiteStatus int
 	CareerSiteTitle  string
 
+	// CareerSiteVerdict is a validation pass's classification of the stored URL: "confirmed",
+	// "wrong" or "unverifiable" (migration 010). Empty means this write is not a validation - a
+	// resolution run produces a URL rather than judging one - and the verdict columns are then left
+	// exactly as they were, including their NULL.
+	CareerSiteVerdict string
+	// CareerSiteVerdictURL is the URL the verdict was reached about (migration 011). It is required
+	// whenever CareerSiteVerdict is set, because the verdict is only usable for skipping while it
+	// still describes the URL the company stores; a resolver that changes career_site_url must
+	// invalidate the verdict rather than inherit it.
+	CareerSiteVerdictURL string
+
 	// ATSPlatformID is set when the accepted careers URL is a third-party board, and BaseURL is the
 	// concrete tenant URL rather than the platform's template.
 	ATSPlatformID int64
@@ -166,6 +177,11 @@ func (w *ResolutionWriter) Write(ctx context.Context, runID int64, firstAttemptI
 		if err := updateCompanyResolution(ctx, tx, res); err != nil {
 			return out, err
 		}
+		if res.CareerSiteVerdict != "" {
+			if err := updateCompanyVerdict(ctx, tx, runID, res); err != nil {
+				return out, err
+			}
+		}
 		if res.ATSPlatformID != 0 {
 			if err := upsertApplicationPlatform(ctx, tx, res); err != nil {
 				return out, err
@@ -210,6 +226,23 @@ func validateResolution(res Resolution) error {
 	if res.ATSPlatformID != 0 && res.ATSBaseURL == "" {
 		return fmt.Errorf("resolution for %s: ATS platform set with no tenant URL", res.CompanySlug)
 	}
+	// The verdict vocabulary is closed for the same reason the rejection reasons are: the column is
+	// queried by value, and a typo written as free text is a value nobody will ever match.
+	switch res.CareerSiteVerdict {
+	case "", "confirmed", "wrong", "unverifiable":
+	default:
+		return fmt.Errorf("resolution for %s: verdict %q is not a declared validation verdict",
+			res.CompanySlug, res.CareerSiteVerdict)
+	}
+	// A verdict without the URL it judged is unusable: the skip rule could not tell whether it still
+	// applies, and would either skip everything or nothing.
+	if res.CareerSiteVerdict != "" && strings.TrimSpace(res.CareerSiteVerdictURL) == "" {
+		return fmt.Errorf("resolution for %s: verdict %q was written with no URL to attach it to",
+			res.CompanySlug, res.CareerSiteVerdict)
+	}
+	if res.CareerSiteVerdict == "" && res.CareerSiteVerdictURL != "" {
+		return fmt.Errorf("resolution for %s: verdict URL set with no verdict", res.CompanySlug)
+	}
 	for i, a := range res.Attempts {
 		if a.ValidationState == "" {
 			return fmt.Errorf("resolution for %s attempt %d: validation state is empty", res.CompanySlug, i)
@@ -241,13 +274,13 @@ func insertAttempt(ctx context.Context, tx *sql.Tx, runID, companyID int64, inde
 	const q = `
 INSERT INTO url_resolution_attempts
     (company_id, run_id, attempt_index, source, candidate_url, candidate_kind,
-     http_status, final_url, title, validation_status, rejection_reason, evidence_path)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     http_status, final_url, title, validation_status, rejection_reason, evidence_path, evidence)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	if _, err := tx.ExecContext(ctx, q,
 		companyID, runID, index, a.Source, a.CandidateURL, string(a.Kind),
 		status, nullable(a.FinalURL), nullable(a.Title), string(a.ValidationState),
-		reason, nullable(a.EvidencePath),
+		reason, nullable(a.EvidencePath), nullable(a.Evidence),
 	); err != nil {
 		return fmt.Errorf("insert resolution attempt %d: %w", index, err)
 	}
@@ -318,6 +351,27 @@ UPDATE companies
 		res.CompanyID,
 	); err != nil {
 		return fmt.Errorf("update company %s: %w", res.CompanySlug, err)
+	}
+	return nil
+}
+
+// updateCompanyVerdict stamps a validation pass's conclusion onto the company row.
+//
+// It is a second statement in the same transaction rather than a CASE expression inside the update
+// above, because the timestamp has to be database-generated and a parameter cannot carry a SQL
+// expression. Nothing is stamped when the verdict is empty, which is how a resolution run leaves a
+// previous validation's verdict intact instead of clearing it.
+func updateCompanyVerdict(ctx context.Context, tx *sql.Tx, runID int64, res Resolution) error {
+	const q = `
+UPDATE companies
+   SET career_site_url_verdict         = ?,
+       career_site_url_verdict_url     = ?,
+       career_site_url_verdict_at      = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+       career_site_url_verdict_run_id  = ?
+ WHERE id = ?`
+
+	if _, err := tx.ExecContext(ctx, q, res.CareerSiteVerdict, res.CareerSiteVerdictURL, runID, res.CompanyID); err != nil {
+		return fmt.Errorf("update validation verdict for %s: %w", res.CompanySlug, err)
 	}
 	return nil
 }

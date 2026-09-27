@@ -93,6 +93,37 @@ UPDATE scrape_runs
 	return nil
 }
 
+// FinishValidationRun writes the terminal state of a browser-use validation run.
+//
+// It is a separate function from FinishRun rather than a wider FinishRun because the counters mean
+// different things. A resolution run's items_inserted/items_updated count URL writes; a validation
+// run writes no URL at all, and its outcome is a three-way split - confirmed, wrong, unverifiable -
+// that the older two counters cannot express. Widening FinishRun would have forced every existing
+// caller to pass zeros for columns it has no opinion about.
+func FinishValidationRun(ctx context.Context, db *sql.DB, runID int64, status string,
+	found, confirmed, wrong, unverifiable int64, errText *string) error {
+	const q = `
+UPDATE scrape_runs
+   SET finished_at        = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+       status             = ?,
+       items_found        = ?,
+       items_inserted     = ?,
+       items_updated      = 0,
+       items_wrong        = ?,
+       items_unverifiable = ?,
+       error_text         = ?
+ WHERE id = ?`
+
+	err := RunWithOneRetry(ctx, func() error {
+		_, execErr := db.ExecContext(ctx, q, status, found, confirmed, wrong, unverifiable, errText, runID)
+		return execErr
+	})
+	if err != nil {
+		return fmt.Errorf("update validation scrape_runs id=%d: %w", runID, err)
+	}
+	return nil
+}
+
 // StartDryRun inserts a run row marked dry_run = 1.
 //
 // A dry run records its attempts like any other run - that is the point of a pre-flight pass, since
