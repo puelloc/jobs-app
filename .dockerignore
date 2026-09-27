@@ -1,0 +1,41 @@
+# Build-context exclusions. The image builds only the Go binaries and the
+# worker/ scripts; everything else here would bloat the context or leak data.
+
+# Git, OS
+.git
+.DS_Store
+
+# Databases (never ship data)
+*.db
+*.db-shm
+*.db-wal
+
+# Runtime data and cross-compiled binaries
+/data/
+/bin/
+
+# Go caches kept in-repo for the sandboxed dev environment
+/.gopath/
+/.gocache/
+/.gomodcache/
+
+# Python worker venv and scratch (built fresh in the image)
+/.venv-browser/
+/.playwright/
+/.browseruse/
+__pycache__/
+
+# Node/npm
+web/node_modules/
+/.npm-cache/
+/.npm-logs/
+
+# One-off scratch
+/career-check/
+/worker/probe_*.log
+/worker/model_compare_*.json
+/worker/listings_*_test.json
+
+# Docs and deploy scripts are host-side, not image content
+/docs/
+/scripts/

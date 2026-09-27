@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -34,6 +35,13 @@ JOB_PATH_TOKENS = (
 )
 
 DEFAULT_MAX_BODY_BYTES = 200_000
+
+
+def _browser_args() -> list[str]:
+    """Chromium flags from BROWSER_USE_BROWSER_ARGS (shared with browser_worker.py). In a container
+    this is --no-sandbox --disable-gpu --disable-dev-shm-usage; unset means Playwright's default."""
+    raw = os.environ.get("BROWSER_USE_BROWSER_ARGS", "").strip()
+    return raw.split() if raw else []
 
 
 def _truncate(text: str, max_bytes: int) -> str:
@@ -169,7 +177,7 @@ def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
 
     jobs: list[dict] = []
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(headless=True, args=_browser_args() or None)
         try:
             page = browser.new_context().new_page()
             page.set_default_timeout(timeout_ms)

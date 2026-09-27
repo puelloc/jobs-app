@@ -1,0 +1,58 @@
+# jobs-app stack: Go API + browser-use worker (one image, several commands).
+# Data lives in ./data (gitignored) and persists across recreations.
+#
+# Only the API is a long-running service. classify/scrape/batch are one-off jobs
+# run against the same image and volume:
+#   docker compose run --rm app classify -commit
+#   docker compose run --rm app scrape -slug twilio -vendor eightfold
+#   docker compose run --rm app batch
+#
+# The web UI (web/) is dev-only for now (adapter-auto, no production adapter),
+# so it is not yet a service here. The API is exposed directly on the host port
+# below until the UI workstream adds adapter-node.
+#
+# ./data must be writable by PUID (default 1000): the server and every one-off
+# job create and own jobs.db there. scripts/deploy.sh creates the directory and
+# passes the invoking user's ids.
+name: jobs
+
+services:
+  app:
+    build: .
+    container_name: jobs_app
+    restart: unless-stopped
+    # Run as the repo owner so the bind-mounted ./data is writable. deploy.sh
+    # exports PUID/PGID from the invoking user; a fresh clone has no data/ dir
+    # and Docker would otherwise create it owned by root, which the container
+    # user (uid 1000) cannot write -> SQLite "unable to open database file (14)".
+    user: "${PUID:-1000}:${PGID:-1000}"
+    logging:
+      # Keep logs bounded on a NAS; read them with `docker compose logs -f app`.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    ports:
+      - "8094:8080"   # API: http://<nas-ip>:8094/api/runs
+    environment:
+      TZ: ${TZ:-America/Chicago}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SERVER_ADDR: ":8080"
+      DB_PATH: /data/jobs.db
+      DATA_DIR: /data
+      # The model host. LAN DNS resolves ai.siggy-lab.org to the NAS's Ollama.
+      OLLAMA_HOST: ${OLLAMA_HOST:-https://ai.siggy-lab.org}
+      # The server spawns these to serve the per-company scrape trigger.
+      BROWSER_WORKER_COMMAND: "/venv/bin/python /app/worker/browser_worker.py"
+      SCRAPE_COMMAND: "/usr/local/bin/scrape"
+    volumes:
+      - ./data:/data
+    # Chromium needs more than Docker's default 64MB /dev/shm; the browser args
+    # also carry --disable-dev-shm-usage as a second line of defense.
+    shm_size: "1gb"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/runs"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

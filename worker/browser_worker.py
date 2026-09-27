@@ -80,7 +80,7 @@ def render(request: dict[str, Any]) -> dict[str, Any]:
 
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            browser = pw.chromium.launch(headless=True, args=_browser_args() or None)
             try:
                 context = browser.new_context()
                 page = context.new_page()
@@ -148,11 +148,13 @@ def _chromium_path() -> str:
 
 
 def _browser_args() -> list[str] | None:
-    """Extra Chromium flags for the agent's browser, from BROWSER_USE_BROWSER_ARGS.
+    """Extra Chromium flags for the browser (render and agent alike), from BROWSER_USE_BROWSER_ARGS.
 
     Unset means "let Chromium use its own sandbox", which is the default a security boundary
     deserves. The one retry in run_agent is the escape hatch for an outer sandbox that makes that
-    impossible; this variable is how an operator makes the choice deliberate instead.
+    impossible; this variable is how an operator makes the choice deliberate instead. In a container
+    it is set to --no-sandbox --disable-gpu --disable-dev-shm-usage, where Chromium's own sandbox
+    cannot start and /dev/shm is small.
     """
     raw = os.environ.get("BROWSER_USE_BROWSER_ARGS", "").strip()
     if not raw:
