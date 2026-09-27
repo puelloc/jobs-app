@@ -1,0 +1,10 @@
+{
+  "vendor": "greenhouse",
+  "verified": true,
+  "source": "public API + internal/careers ParseTenant",
+  "routing": "json_api",
+  "careers_pattern": "boards.greenhouse.io/<company>",
+  "api_hint": "https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs",
+  "hints": {},
+  "gotchas": []
+}

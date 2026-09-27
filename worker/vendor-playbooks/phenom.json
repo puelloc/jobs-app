@@ -1,0 +1,20 @@
+{
+  "vendor": "phenom",
+  "verified": true,
+  "source": "probe 2026-09-27, US Bancorp (careers.usbank.com)",
+  "routing": "html_only",
+  "careers_pattern": "careers.<company>.com/global/en",
+  "api_hint": "Phenom careers search is an Aurelia SPA; the search page fetches JSON behind the scenes",
+  "hints": {
+    "search_box": ["input[data-ph-at-id='globalsearch-input']", "input#typehead"],
+    "search_button": ["button[data-ph-at-id='globalsearch-button']", "button[aria-label='Search']"],
+    "remote_facet": ["button[aria-controls='RemoteBody']", "button:has-text('Remote')"],
+    "remote_option": ["text:Yes"],
+    "results_count": [".phs-jobs-list-count span.result-text"]
+  },
+  "gotchas": [
+    "Aurelia SPA (`ph-*` classes, `au-target`): content loads dynamically, wait after each action.",
+    "The Remote facet is a collapsible with a Yes/No split; the header shows total vs Remote counts.",
+    "Autocomplete: click a suggestion, do not press Enter."
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "vendor": "eightfold",
+  "verified": true,
+  "source": "probe 2026-09-27, Twilio (jobs.twilio.com)",
+  "routing": "html_only",
+  "careers_pattern": "jobs.<company>.com",
+  "api_hint": "Eightfold search is client-side over a JSON API; the search URL query uses `query` and `filter_work_location_option=remote_local`",
+  "hints": {
+    "listings_link": ["a[aria-label='See all open positions']", "text:See all open positions"],
+    "search_box": ["input[data-testid='position-query-search-search']", "input[role='combobox']"],
+    "search_button": ["button[data-testid='search-jobs-button']"],
+    "remote_filter": ["button:has-text('location type')", "button:has-text('Tipo de ubicación')"],
+    "remote_option": ["text:Remote"]
+  },
+  "gotchas": [
+    "The first-party careers page needs a 'See all open positions' click before the search UI appears.",
+    "May render in Spanish locale (buttons 'Buscar empleos', 'Tipo de ubicación') while the jobs are still US-remote.",
+    "The search box is autocomplete: click a suggestion, do not press Enter."
+  ]
+}

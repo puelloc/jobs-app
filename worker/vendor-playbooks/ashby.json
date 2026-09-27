@@ -1,0 +1,10 @@
+{
+  "vendor": "ashby",
+  "verified": true,
+  "source": "public API + internal/careers ParseTenant",
+  "routing": "json_api",
+  "careers_pattern": "jobs.ashbyhq.com/<company>",
+  "api_hint": "https://api.ashbyhq.com/posting-api/job-board/{board_name}",
+  "hints": {},
+  "gotchas": []
+}

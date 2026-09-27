@@ -1,0 +1,10 @@
+{
+  "vendor": "lever",
+  "verified": true,
+  "source": "public API + internal/careers ParseTenant",
+  "routing": "json_api",
+  "careers_pattern": "jobs.lever.co/<company>",
+  "api_hint": "https://api.lever.co/v0/postings/{company}?mode=json",
+  "hints": {},
+  "gotchas": []
+}
