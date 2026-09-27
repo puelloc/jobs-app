@@ -883,6 +883,7 @@ adversarial re-testing, and several were stated confidently before being overtur
 | "Qwen3 27B" is not a real tag | It is real: `qwen3.8-27b-64k:latest` | `GET /api/tags` on the live host |
 | The model may not do structured actions at all | It emits a valid nested-argument tool call | `POST /api/chat` with a tools schema |
 | "632 resolved" in the full run means 632 working careers URLs | 632 is the **stored** count. A 2026-09-27 census of all 632 stored URLs found 529 (35.3%) reachable careers pages, 54 (3.6%) provably wrong pages, and 49 (3.3%) unverifiable (blocked/dead to a plain client). The 42.2% headline was the stored share, not a working share. | Fetching every stored URL and classifying by content; `docs/runs/2026-09-26-full.md` |
+| The 562 no-homepage companies are blocked or lack an article | **Most were neither.** 180 have a redirect/normalisation between the S&P name and the article, and 103 more have a wikilink target that resolves although the *name* finds no article. Both were re-keying bugs (family 7), not blocks - so the §8.1 browser-use call was resting on a number that was mostly a code defect. | Re-parsing the stored raw wikitext against the live API; `1ca9b6a`, `ea8ab73` |
 
 ### Recurring failure modes
 
@@ -959,6 +960,35 @@ A related instance from the parser: the delimiter regex `\n[ \t]*\|` consumed on
 second. The check "did this split produce cells" passed while every cell carried a leading `|`. A
 malformed match that yields *plausible* output is worse than a match that fails.
 
+**7. Re-keying a result onto the wrong identity.** Both tier-1 bugs fixed on 2026-09-27 (`1ca9b6a`,
+`ea8ab73`) are this family, and it is the most expensive one in the project so far: together they
+account for up to 283 of the 562 no-homepage companies, i.e. most of the 37.5% that made the
+resolution rate look like 35.3%.
+
+The shape is a **round trip with an unasserted identity**: a request is issued under key A, the
+response arrives carrying key B, and the code files the value under B while the caller looks it up
+under A. Neither half is wrong in isolation, so neither raises an error - the value is simply
+unreachable, and the company is recorded as "looked up, found nothing". It is indistinguishable from
+a genuine miss, which is why it survived a 102-minute run and a census.
+
+Two instances:
+
+| Where | Key sent | Key returned | Why the tests missed it |
+| --- | --- | --- | --- |
+| `homepage.Client` | requested title | MediaWiki reports `query.normalized` / `query.redirects` separately from the page, which is filed under the *target* title | `wikipediaBody` never emitted either array, so no fixture could express a redirect |
+| `LoadCompanies` | `Article` (correct) | the write path had no `article_title` column, so the value reloaded was the company *name* | no test asserted `Article` survived write → read |
+
+The rule: **when a value crosses a boundary and comes back keyed differently, the identity is part of
+the contract and needs its own test.** Concretely - a stub must be able to emit the aliasing the real
+API emits (family 5), and any parsed field that later code reads back must have a round-trip test
+(family 6). The canary in the tree, `TestUpsertIndexCompaniesDoesNotPersistTheArticleTitle`, was
+written deliberately to scream when the column appeared, and it did: it is the one thing that made
+this diagnosable in minutes rather than another run.
+
+**The audit:** for every map keyed by a value derived from an external response, find where that key
+was constructed and whether the response can change it. `homepages[c.Article]` is the shape to grep
+for.
+
 ---
 
 ## 10. Environment
@@ -1033,17 +1063,51 @@ figure: **529 confirmed careers pages (35.3%), 54 provably wrong (3.6%), 49 unve
 The 42.2% the report first quoted was the share of companies with a *stored* value, not a working
 one.
 
-1. **Fix the tier-1 join failure first.** 562 companies (37.5%) have no homepage, and the count of
-   `wikipedia_infobox` attempts exactly equals the count of non-NULL websites, so an article that
-   resolves by hand is producing no attempt at all. Of the 562, roughly 310 have a Wikipedia article
-   that `action=query` resolves fine (sampled: `advanced-micro-devices` / "AMD",
-   `advance-auto-parts-inc`, `a10-networks-inc`), so the 50-title batch is losing titles between the
-   request and the result map. **This is the largest single lever on the resolution rate and costs no
-   network round trips to diagnose.** It is a join failure, not a block, so no browser can help.
-2. **Then re-run and re-measure** before any M2b/M3 decision: repairing tier 1 moves the blocked
-   share that §8.1's browser-use call rests on.
-3. M2b (HTML-only ATS tenant extraction) remains the next feature tier; M3 (browser-use) stays
+1. ~~**Fix the tier-1 join failure first.**~~ **DONE 2026-09-27** (`1ca9b6a`, `ea8ab73`). The
+   diagnosis in the previous revision of this section was right about the symptom but attributed it
+   to one cause; there were **two independent bugs**, both in how a Wikipedia result was re-keyed
+   onto the company that asked for it:
+
+   - **The alias arrays were not decoded.** MediaWiki returns a redirected or normalised page under
+     its *target* title and reports the mapping separately in `query.normalized` and
+     `query.redirects`. Neither was decoded, so the result was filed under the canonical title, the
+     caller's lookup by the requested title missed, and the company looked like it had no homepage
+     at all. Followed to the end of the chain, because a title can be normalised and then redirected
+     more than once. Wikidata reports sitelinks the same way and needed the same fix.
+   - **The article title was parsed and then thrown away.** The parser extracts the enwiki target
+     each Security cell links to into `Company.Article`, and `store.IndexCompany` documents it as the
+     join key - but `companies` had no column for it, so the write path dropped it and
+     `LoadCompanies` rebuilt the title from the company name. The name is usually not the title: the
+     page reads "Advanced Micro Devices" and links to `[[AMD]]`, "Amazon" links to
+     `[[Amazon (company)]]`, "Deere & Company" links to `[[John Deere]]`. Migration `008` adds
+     `article_title`; NULL (the ~253 rows with no wikilink) falls back to the name.
+
+   Measured against the 562-company residue: 180 companies have a redirect/normalisation between name
+   and title, and 103 more whose *name* finds no article at all have a link target that resolves -
+   103 of 106 tested, all carrying an infobox website. A 60-company sample that previously resolved
+   0 now resolves 18. **The information was in the wikitext the whole time; both bugs were in the
+   re-keying, and both are the fake-input-shape family (§9): `wikipediaBody` never emitted
+   `normalized`/`redirects`, and no fixture ever asserted that `Article` survived the write path.**
+2. **Backfill and re-run, then re-measure.** The re-run of `sp1500` has backfilled `article_title`
+   on the live DB (1,246 rows populated, 271 differing from the name). The released gain has **not**
+   yet been measured across the whole residue - only a 60-company dry run (`run_id=10`, 18/60).
+   Re-run resolution over the residue and update `docs/runs/` before any M2b/M3 decision: repairing
+   tier 1 moves the blocked share that §8.1's browser-use call rests on.
+3. **SearXNG Phase A is unblocked but not implemented.** `SEARXNG_URL` is configured
+   (`ca1b1e6`) and `format=json` works through the reverse proxy at
+   `https://search.siggy-lab.org`; a real query returns the right careers page plus aggregators
+   (ZipRecruiter) that must be rejected. The client, the `Source='searxng'` value and the M/N
+   decision rule are **not** written yet. Do not start this while item 2 is unmeasured: it adds a
+   dependency to answer a question the join fix may already have answered.
+4. M2b (HTML-only ATS tenant extraction) remains the next feature tier; M3 (browser-use) stays
    deferred by the §8.1 call in the run report.
+
+**Known defect, not yet fixed:** `upsertIndexCompany` reports "inserted" whenever `RETURNING` yields
+a row, but the `ON CONFLICT DO UPDATE` branch yields a row on every real update too. Re-running the
+index over a populated table therefore reported `inserted=1246` for 1,498 companies while creating
+none (`run=7,8,9`). The returned count should mean "newly created". This predates the `008` change
+and is a silent-aggregation instance: the counter is measuring the wrong thing and no test asserts
+it.
 
 **Do not re-open §5 without new evidence.** If a measurement contradicts a decision, update this
 document's corrections ledger (§9) rather than silently changing course.
