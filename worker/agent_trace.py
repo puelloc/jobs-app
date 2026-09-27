@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Callable
 
 
@@ -17,6 +18,11 @@ class TraceWriter:
         self._fh = None
         if path:
             try:
+                parent = os.path.dirname(path)
+                if parent:
+                    # The container's /data/traces may not exist on a fresh deploy; create it so the
+                    # trace is not silently dropped.
+                    os.makedirs(parent, exist_ok=True)
                 self._fh = open(path, "a", encoding="utf-8")
             except OSError:
                 self._fh = None
