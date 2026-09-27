@@ -85,3 +85,21 @@ func TestScrapeCompany_UnconfiguredCommand(t *testing.T) {
 	rec := do(t, h, http.MethodPost, "/api/companies/1/scrape")
 	requireError(t, rec, http.StatusServiceUnavailable, "internal")
 }
+
+func TestScrapeCompany_RejectsConcurrentScrape(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	// "sh -c 'sleep 5'" keeps the first scrape in flight long enough for the second request to
+	// observe the gate. The extra --slug/--vendor/--run-id args become $0/$1... and are ignored.
+	h := NewRouter(database, t.TempDir(), []string{"sh", "-c", "sleep 5"})
+	seedClassifiedCompany(t, database)
+
+	rec := do(t, h, http.MethodPost, "/api/companies/1/scrape")
+	requireStatus(t, rec, http.StatusAccepted)
+
+	rec2 := do(t, h, http.MethodPost, "/api/companies/1/scrape")
+	requireError(t, rec2, http.StatusConflict, "conflict")
+}

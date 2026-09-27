@@ -159,7 +159,7 @@ def _classify_location(posting: dict) -> dict:
 
 
 def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
-          link_pattern: str | None) -> dict:
+          link_pattern: str | None, crawl_delay: float = 0.0) -> dict:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 
@@ -196,7 +196,12 @@ def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
                 if len(picked) >= max_jobs:
                     break
 
-            for p in picked:
+            for i, p in enumerate(picked):
+                # Politeness: honor the site's requested crawl-delay between requests to the same
+                # host. The listings page itself is already loaded, so the delay starts before the
+                # second posting.
+                if i > 0 and crawl_delay > 0:
+                    time.sleep(crawl_delay)
                 rec = {"url": p["url"], "title": p["title"], "description": None, "raw_data": None}
                 try:
                     page.goto(p["url"], wait_until="domcontentloaded", timeout=timeout_ms)
@@ -258,10 +263,13 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=45, help="per-page seconds")
     ap.add_argument("--link-pattern", default=None,
                     help="optional regex to select posting links (overrides the heuristic)")
+    ap.add_argument("--crawl-delay", type=float, default=0.0,
+                    help="seconds to wait between posting fetches (politeness)")
     ap.add_argument("--out", default=None, help="write JSON to this file instead of stdout")
     args = ap.parse_args()
 
-    result = fetch(args.url, args.max_jobs, args.max_body_bytes, args.timeout, args.link_pattern)
+    result = fetch(args.url, args.max_jobs, args.max_body_bytes, args.timeout, args.link_pattern,
+                   args.crawl_delay)
 
     payload = json.dumps(result, ensure_ascii=False, indent=2)
     if args.out:

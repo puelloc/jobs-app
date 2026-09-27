@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"jobsapp/internal/config"
 	"jobsapp/internal/db"
+	"jobsapp/internal/robots"
 	"jobsapp/internal/store"
 )
 
@@ -59,6 +61,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	maxJobs := fs.Int("max-jobs", 25, "postings to extract")
 	maxSteps := fs.Int("max-steps", 25, "agent navigation budget")
 	timeout := fs.Duration("timeout", 20*time.Minute, "whole-scrape budget")
+	minCrawlDelay := fs.Duration("min-crawl-delay", 0, "floor on the per-host delay between fetches")
 	runIDFlag := fs.Int64("run-id", 0, "existing scrape_runs id to finish (0 starts a new one)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -127,6 +130,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	trace := fmt.Sprintf("%s/traces/%d.jsonl", cfg.DataDir, runID)
+	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
+
+	// 0. Politeness: honor the careers origin's robots.txt before the agent touches it.
+	careersPolicy, err := robots.Fetch(ctx, httpClient, company.CareerSiteURL, cfg.UserAgent)
+	if err != nil {
+		finish("error", 0, 0, 0, fmt.Sprintf("robots: %v", err))
+		fmt.Fprintf(stderr, "scrape: robots %s: %v\n", company.CareerSiteURL, err)
+		return 1
+	}
+	if !careersPolicy.Allowed(company.CareerSiteURL, cfg.UserAgent) {
+		finish("ok", 0, 0, 0, "")
+		fmt.Fprintf(stdout, "run_id=%d company=%s robots=disallowed url=%s\n",
+			runID, company.Slug, company.CareerSiteURL)
+		return 0
+	}
 
 	// 1. Agent: find the filtered listings URL, writing the live trace as it goes.
 	probeOut, err := exec.CommandContext(ctx, python, "worker/remote_roles_probe.py",
@@ -153,11 +171,35 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	// 2. Fetch: render the listings URL and extract postings + descriptions + location.
-	fetchOut, err := exec.CommandContext(ctx, python, "worker/listings_fetch.py",
+	// 2. Fetch: honor the listings origin's robots.txt too, then render and extract.
+	listingsPolicy, err := robots.Fetch(ctx, httpClient, probe.Answer.ListingsURL, cfg.UserAgent)
+	if err != nil {
+		finish("error", 0, 0, 0, fmt.Sprintf("robots listings: %v", err))
+		fmt.Fprintf(stderr, "scrape: robots %s: %v\n", probe.Answer.ListingsURL, err)
+		return 1
+	}
+	if !listingsPolicy.Allowed(probe.Answer.ListingsURL, cfg.UserAgent) {
+		finish("ok", 0, 0, 0, "")
+		fmt.Fprintf(stdout, "run_id=%d company=%s robots=disallowed listings=%s\n",
+			runID, company.Slug, probe.Answer.ListingsURL)
+		return 0
+	}
+	crawlDelay := listingsPolicy.CrawlDelay(cfg.UserAgent)
+	if d := careersPolicy.CrawlDelay(cfg.UserAgent); d > crawlDelay {
+		crawlDelay = d
+	}
+	if *minCrawlDelay > crawlDelay {
+		crawlDelay = *minCrawlDelay
+	}
+
+	fetchArgs := []string{"worker/listings_fetch.py",
 		"--url", probe.Answer.ListingsURL,
 		"--max-jobs", fmt.Sprintf("%d", *maxJobs),
-	).Output()
+	}
+	if crawlDelay > 0 {
+		fetchArgs = append(fetchArgs, "--crawl-delay", fmt.Sprintf("%.2f", crawlDelay.Seconds()))
+	}
+	fetchOut, err := exec.CommandContext(ctx, python, fetchArgs...).Output()
 	if err != nil {
 		finish("error", 0, 0, 0, fmt.Sprintf("fetch: %v", err))
 		fmt.Fprintf(stderr, "scrape: fetch: %v\n", err)

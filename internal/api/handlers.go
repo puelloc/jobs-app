@@ -34,6 +34,7 @@ const (
 	codeNotFound         = "not_found"
 	codeInternal         = "internal"
 	codeMethodNotAllowed = "method_not_allowed"
+	codeConflict         = "conflict"
 	contentTypeJSON      = "application/json; charset=utf-8"
 	internalErrorMessage = "internal server error"
 )

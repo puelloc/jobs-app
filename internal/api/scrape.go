@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strconv"
+	"sync"
 
 	"jobsapp/internal/store"
 )
@@ -22,8 +23,34 @@ type ScrapeResponse struct {
 	RunID int64 `json:"run_id"`
 }
 
+// scrapeGate serializes scrapes within one server process: only one listing scrape runs at a time.
+// The full sweep goes through cmd/batch, which is sequential by construction; this is the same
+// boundary for the per-company trigger, so clicking "scrape" on several companies cannot fan out
+// into concurrent browser agents (which would contend on SQLite's single writer and the shared
+// model host). A process that is already in flight makes a new trigger a 409 conflict.
+type scrapeGate struct {
+	mu      sync.Mutex
+	running bool
+}
+
+func (g *scrapeGate) tryAcquire() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.running {
+		return false
+	}
+	g.running = true
+	return true
+}
+
+func (g *scrapeGate) release() {
+	g.mu.Lock()
+	g.running = false
+	g.mu.Unlock()
+}
+
 // handleScrapeCompany serves POST /api/companies/{id}/scrape.
-func handleScrapeCompany(db *sql.DB, scrapeCmd []string) http.HandlerFunc {
+func handleScrapeCompany(db *sql.DB, scrapeCmd []string, gate *scrapeGate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if len(scrapeCmd) == 0 {
 			writeError(w, http.StatusServiceUnavailable, codeInternal, "scrape command is not configured (SCRAPE_COMMAND)")
@@ -52,27 +79,38 @@ func handleScrapeCompany(db *sql.DB, scrapeCmd []string) http.HandlerFunc {
 			return
 		}
 
+		if !gate.tryAcquire() {
+			writeError(w, http.StatusConflict, codeConflict, "a scrape is already running; try again when it finishes")
+			return
+		}
+
 		runPlatformID, err := store.PlatformIDByName(r.Context(), db, "career_listings")
 		if err != nil {
+			gate.release()
 			writeInternalError(w, fmt.Errorf("career_listings platform: %w", err))
 			return
 		}
 		runID, _, err := store.StartRun(r.Context(), db, runPlatformID)
 		if err != nil {
+			gate.release()
 			writeInternalError(w, fmt.Errorf("start run: %w", err))
 			return
 		}
 
 		// Fire-and-forget: cmd/scrape owns its run (it finishes it), so the request returns the id
-		// immediately and a goroutine reaps the process when it exits.
+		// immediately and a goroutine reaps the process when it exits, releasing the gate then.
 		args := append([]string{}, scrapeCmd[1:]...)
 		args = append(args, "--slug", slug, "--vendor", vendor, "--run-id", fmt.Sprintf("%d", runID))
 		cmd := exec.Command(scrapeCmd[0], args...)
 		if err := cmd.Start(); err != nil {
+			gate.release()
 			writeInternalError(w, fmt.Errorf("launch scrape: %w", err))
 			return
 		}
-		go func() { _ = cmd.Wait() }()
+		go func() {
+			_ = cmd.Wait()
+			gate.release()
+		}()
 
 		writeJSON(w, http.StatusAccepted, ScrapeResponse{RunID: runID})
 	}

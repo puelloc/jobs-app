@@ -6,6 +6,9 @@
 *.db-shm
 *.db-wal
 
+# Cross-compiled Go binaries (build artifacts, built by scripts/build.sh)
+/bin/
+
 # Raw scraped payloads (large, re-fetchable evidence)
 /data/
 

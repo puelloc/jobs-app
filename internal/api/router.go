@@ -27,7 +27,7 @@ func NewRouter(db *sql.DB, dataDir string, scrapeCmd []string) http.Handler {
 	mux.HandleFunc("GET /api/companies/{id}", handleGetCompany(db))
 	mux.HandleFunc("GET /api/runs", handleListRuns(db))
 	mux.HandleFunc("GET /api/traces/{id}", handleGetTrace(dataDir))
-	mux.HandleFunc("POST /api/companies/{id}/scrape", handleScrapeCompany(db, scrapeCmd))
+	mux.HandleFunc("POST /api/companies/{id}/scrape", handleScrapeCompany(db, scrapeCmd, &scrapeGate{}))
 
 	// Deliberately no catch-all pattern: registering "/" would match every
 	// method, and the mux would then serve it for POST /api/jobs instead of
