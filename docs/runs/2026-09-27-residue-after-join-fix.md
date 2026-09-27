@@ -100,24 +100,31 @@ database. Its verdicts on the 632 pre-existing URLs remain valid - this run only
 rewrites none of those - but it holds no verdict for the 202 companies recovered here, so its
 classification of the residue does not yet include them.
 
-## Decisions taken on 2026-09-27 (recorded here pending a plan update)
+## Decisions taken on 2026-09-27
 
-§12 of `docs/sp1500-plan.md` still carries the tier-1 item as the next action, and this report
-deliberately does not edit that file: another agent held uncommitted changes to it at the time, and a
-write from a pre-`76d9194` buffer would have reverted the close-out. The three decisions below are
-recorded here so they are not lost in the meantime.
+These were first recorded here because §12 of `docs/sp1500-plan.md` could not be edited while another
+agent held uncommitted changes to it - a write from a pre-`76d9194` buffer would have reverted the
+close-out. That agent has since settled and confirmed it merged on top of this work rather than
+reverting it, so **§12 now carries the result and these decisions** and this section is a record
+rather than the only copy.
 
 1. **Do not validate the 202 new URLs yet.** 834 therefore stands as an explicitly *stored* count,
    with no working-share figure claimed for the new values. This is a decision, not an oversight -
    the 202 have not been fetched and classified, and the number should not be read as 834 working
-   careers pages.
+   careers pages. (The browser sweep has since validated 634 of the 834; the remaining 200 are
+   stored-but-unvalidated, which is the same decision, now stated as a count.)
 2. **Do not build the SearXNG tier yet** (Phase A). `SEARXNG_URL` is configured and `format=json`
    works through the reverse proxy, but the client, the `Source='searxng'` value and the M/N decision
    rule are unwritten. Rationale: the join fix recovered 202 companies, and the remaining residue is
    now dominated by 242 rows with no Wikipedia article at all - a set a search engine cannot help
    with either, because there is nothing to search *for*. Revisit only if the 379
    homepage-without-a-careers-page set turns out to be worth attacking.
-3. **Validate the 202 recovered URLs before extending the browser-use argument to them.** The
-   existing sweep's verdicts on the 632 pre-existing URLs stand unchanged; what it cannot speak to is
-   the companies this run recovered, so any §8.1 browser-use conclusion that rests on the size of the
+3. **Validate the recovered URLs before extending the browser-use argument to them.** The existing
+   sweep's verdicts on the pre-existing URLs stand unchanged; what it cannot speak to is the
+   companies this run recovered, so any §8.1 browser-use conclusion that rests on the size of the
    residue needs revisiting once they are classified.
+
+**This is where the careers-site workstream stops.** The durable dataset is
+`data/sp1500-live/jobs.db`; the scratch copy this run wrote, `/tmp/sp1500-live/jobs.db`, has had its
+URLs merged into it and is no longer authoritative. The next workstream - fetching job listings from
+these URLs - is planned in `docs/scraping-plan.md`.

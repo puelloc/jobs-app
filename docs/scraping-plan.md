@@ -243,13 +243,24 @@ go build -o data/sp1500-live/sp1500 ./cmd/sp1500
 
 ## 8. Repository state
 
-Uncommitted by design: this workstream's changes are in the working tree, alongside other agents'
-in-flight files (`career-check/`, `internal/api/runs_test.go`, and pre-existing edits to
-`cmd/scraper`, `internal/runresolve`, `internal/store`). Nothing was committed, and no commit should
-sweep those together — review `git status` first.
+**All committed; the working tree is clean as of 2026-09-27.** The careers-site workstream was closed
+out and the browser-validation tier, the RemoteOK normalizer, and the store reads were committed as
+separate units (`2c0671c` onward), so `git status` is empty and `go build ./... && go test ./...`
+passes. There are no in-flight files to avoid sweeping up, and no uncommitted work to lose.
+
+Two notes for a future session:
+
+- `career-check/` (a one-off browser profile with ~1,000 vendored extension files) is now gitignored
+  rather than committed. The scratch copy this workstream used at `/tmp/sp1500-live/` has been
+  deleted: its URLs were merged into the durable database, verified byte-identical or additive, and
+  its raw Wikipedia payloads were copied into `data/sp1500-live/data/raw/`.
+- The Go toolchain caches are in-repo (`.gocache/`, `.gopath/`), so build and test need
+  `export GOCACHE=$PWD/.gocache GOPATH=$PWD/.gopath GOFLAGS=-mod=mod` — see `.gitignore` for why.
 
 Artifacts from the validation pass:
 
 - `docs/runs/2026-09-27-browser-validation.md` — the measured outcome and the four defects fixed.
+- `docs/runs/2026-09-27-residue-after-join-fix.md` — the tier-1 re-keying fix and its measurement.
 - `data/sp1500-live/jobs.db` — the merged database described in §1.
+- `data/sp1500-live/data/raw/` — the stored Wikipedia payloads and per-company careers evidence.
 - `data/sp1500-live/*.out` / `*.err` — raw run logs, including the per-company progress lines.
