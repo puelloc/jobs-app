@@ -1,11 +1,10 @@
 // Command scraper performs one RemoteOK scrape run and exits.
 //
-// It implements the lifecycle in docs/scraper-design.md steps 1-13. One step is
-// deliberately stubbed: normalization (step 7) accepts zero jobs until
-// docs/remoteok-mapping.md exists, so a run ends on the documented "no usable job
-// elements" path with exit code 4. Every other step - config, DB open and
-// migrate, scrape_runs insert, fetch, raw persist, parse, both stale-marking
-// guards, run finish, and the stderr failure line - is real.
+// It implements the lifecycle in docs/scraper-design.md steps 1-13 for real:
+// config, DB open and migrate, scrape_runs insert, fetch, raw persist, parse,
+// normalize against docs/remoteok-mapping.md, upsert and stale-mark in one
+// transaction, run finish, and the single log line. The stale-marking guards
+// remain: an empty seen set, or a run that accepted zero jobs, closes nothing.
 //
 // There is no scheduler, no server, and no logger: logs go to stdout/stderr.
 package main
@@ -140,14 +139,16 @@ func run(ctx context.Context) int {
 		})
 	}
 
-	// design: scrape_runs.items_found counts raw elements. The real normalizer
-	// will exclude a detected legal notice; the stub inspects nothing, so every
-	// element is counted.
+	// design: scrape_runs.items_found counts raw elements. It deliberately counts
+	// every element, including the legal notice, and is left exactly as it was
+	// before the normalizer landed; docs/scraper-design.md's scrape_runs table
+	// says a detected notice is excluded, which this build does not do.
 	itemsFound := int64(len(elements))
 
-	// ---- step 7: extract identifiers, then normalize (STUB) ---------------
-	// design: Run lifecycle step 7. Normalize keeps the real signature but has a
-	// stubbed body: no jobs, an empty seen set, one skip per element.
+	// ---- step 7: extract identifiers, then normalize ----------------------
+	// design: Run lifecycle step 7. Normalize builds the seen set from each
+	// element's identifier before it decodes the rest of the element, so an
+	// element that fails normalization can never be mistaken for an absent one.
 	jobs, seenIDs, skipped, err := remoteok.Normalize(elements)
 	if err != nil {
 		return finishFailed(database, runID, finishInput{
@@ -157,44 +158,65 @@ func run(ctx context.Context) int {
 		})
 	}
 
-	// ---- steps 8 and 9: upsert jobs, then mark stale jobs -----------------
-	// design: Run lifecycle steps 8 and 9. Both are no-ops this iteration: with
-	// zero accepted jobs there is nothing to upsert, and BOTH stale-marking guards
-	// fire - the seen set is empty and the accepted count is zero - so no row is
-	// closed. This is a documented path, not a shortcut.
-	//
-	// The upsert counters stay zero for the whole of this iteration: the stub
-	// accepts no jobs, so the optional upsert step below is unreachable in
-	// practice, and the zero-jobs path records 0/0/0 by construction.
-	if len(jobs) > 0 {
-		// design-gap: steps 8-10 need a jobs store (internal/store/jobs.go), which
-		// the build spec excludes until docs/remoteok-mapping.md exists. Reaching
-		// here is impossible while Normalize is stubbed; the branch exists so the
-		// flow does not silently pretend the steps ran.
-		return finishFailed(database, runID, finishInput{
-			itemsFound: itemsFound,
-			failure: failure{
-				step: "upsert", condition: "not_implemented",
-				err:      fmt.Errorf("job upsert is not implemented"),
-				httpCode: httpStatus, rawPath: rawPath,
-			},
-			exitCode: exitFailure,
-		})
-	}
-
 	// Per-element skip reasons go to stderr only at debug level.
 	//
 	// design: Observability - a skipped row gets its own line at debug level. The
-	// design doc also permits promoting those lines to info in the
-	// "nothing normalized" case, but this build's spec requires exactly ONE stderr
-	// line per run, so the promotion is off by default and the aggregate count
-	// lives in the single failure line instead. LOG_LEVEL=debug turns the detail
-	// on; the run's failure line is unaffected either way.
+	// design doc also permits promoting those lines to info in the "nothing
+	// normalized" case, but this build's spec requires exactly ONE stderr line per
+	// run, so the promotion is off by default and the aggregate count lives in the
+	// single failure line instead. LOG_LEVEL=debug turns the detail on; the run's
+	// failure line is unaffected either way. This runs before the step 8-10 block
+	// because a successful run returns from there.
 	if cfg.LogLevel == "debug" {
 		for _, sk := range skipped {
 			fmt.Fprintf(os.Stderr, "run=%s source=%s level=debug step=normalize skipped_index=%d reason=%q\n",
 				runLabel, sourceName, sk.Index, sk.Reason)
 		}
+	}
+
+	// ---- steps 8, 9 and 10: upsert jobs, mark stale, commit ---------------
+	// design: Run lifecycle steps 8-10. Both steps are skipped entirely when the
+	// run accepted no jobs: there is nothing to upsert, and neither an empty seen
+	// set nor a zero accepted count may close a row (Freshness contract, "Two
+	// guards"). The zero-jobs paths below record 0/0/0 by construction.
+	if len(jobs) > 0 {
+		inserted, updated, closed, upsertErr := upsertJobsAndMarkStale(ctx, database, jobs, seenIDs)
+		if upsertErr != nil {
+			// design: Failure policy - "DB is locked" maps to exit 3; any other
+			// write failure is a generic failure. Either way the transaction was
+			// rolled back, so the run wrote nothing.
+			condition := "upsert_failed"
+			exitCode := exitFailure
+			if store.IsLockError(upsertErr) {
+				condition = "db_locked"
+				exitCode = exitDBLocked
+			}
+			return finishFailed(database, runID, finishInput{
+				itemsFound: itemsFound,
+				failure: failure{
+					step: "upsert", condition: condition, err: upsertErr,
+					httpCode: httpStatus, rawPath: rawPath,
+				},
+				exitCode: exitCode,
+			})
+		}
+
+		// design: Run lifecycle step 11.
+		if ferr := finishRunRow(database, runID, "ok", itemsFound, inserted, updated, nil); ferr != nil {
+			return finishWriteFailed(runLabel, ferr, httpStatus, rawPath)
+		}
+
+		// design: Observability / "stdout on success"; Durability / "Same-day
+		// collision behavior" - a collision is still a completed run, so the
+		// success line prints and the exit code is 5.
+		rawState := "written"
+		exitCode := exitOK
+		if !rawWritten {
+			rawState = "existing"
+			exitCode = exitRawCollision
+		}
+		printSuccess(runID, httpStatus, len(body), rawPath, rawState, itemsFound, inserted, updated, closed, time.Since(runStart))
+		return exitCode
 	}
 
 	if len(seenIDs) == 0 {
@@ -277,6 +299,63 @@ func finishWriteFailed(runLabel string, err error, httpStatus int, rawPath strin
 	}
 	printFailure(runLabel, f, exitCode)
 	return exitCode
+}
+
+// upsertJobsAndMarkStale performs design steps 8, 9 and 10 as one transaction:
+// resolve each job's company, upsert every job, close this source's unseen rows,
+// and commit. It returns the insert and update counters and the number of rows
+// closed.
+//
+// The batch is one transaction so the upserts and the stale-marking land
+// together or not at all (design: Run lifecycle step 10). A statement that fails
+// inside a transaction cannot be retried in place, so the design's single
+// bounded retry for a locked database is applied to the whole transaction
+// instead; every write it performs is idempotent, which makes a replay safe.
+func upsertJobsAndMarkStale(ctx context.Context, database *sql.DB, jobs []remoteok.NormalizedJob, seenIDs map[string]struct{}) (inserted, updated, closed int64, err error) {
+	err = store.RunWithOneRetry(ctx, func() error {
+		tx, beginErr := database.BeginTx(ctx, nil)
+		if beginErr != nil {
+			return fmt.Errorf("begin upsert transaction: %w", beginErr)
+		}
+		// A rollback after a successful commit is a no-op.
+		defer func() { _ = tx.Rollback() }()
+
+		// The counters describe the attempt that succeeds, so reset them here.
+		inserted, updated, closed = 0, 0, 0
+
+		for _, job := range jobs {
+			companyID, resolveErr := store.ResolveOrCreateCompany(ctx, tx, job.CompanyName)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			_, wasInserted, upsertErr := store.UpsertJob(ctx, tx, job, companyID, platformID)
+			if upsertErr != nil {
+				return upsertErr
+			}
+			if wasInserted {
+				inserted++
+			} else {
+				updated++
+			}
+		}
+
+		// design: Run lifecycle step 9 - stale-marking runs after the upserts, so
+		// rows written by this run are already reopened and cannot be closed.
+		var staleErr error
+		closed, staleErr = store.MarkJobsStale(ctx, tx, platformID, seenIDs)
+		if staleErr != nil {
+			return staleErr
+		}
+
+		if commitErr := tx.Commit(); commitErr != nil {
+			return fmt.Errorf("commit upsert transaction: %w", commitErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return inserted, updated, closed, nil
 }
 
 // failure is one failed run: where it died, why, and what the operator sees.
