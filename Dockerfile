@@ -3,8 +3,8 @@
 # Two build stages, mirroring the rss-app layout: a pinned Go toolchain builds
 # the cgo-free binaries, then a Debian+Python runtime carries the browser-use
 # worker (Playwright + its pinned Chromium) alongside them. One image runs the
-# long-lived `server`, and `docker compose run` runs classify/scrape/batch
-# against the same /data volume.
+# long-lived `server`; `docker compose run` runs the one-off jobs (sp1500,
+# classify, scrape, batch) against the same /data volume.
 
 # ---- Go build ----
 # Pinned to the toolchain required by go.mod (go 1.27.1); a floating tag could
@@ -18,7 +18,10 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/server ./cmd/server \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/scrape ./cmd/scrape \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/classify ./cmd/classify \
- && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/batch ./cmd/batch
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/batch ./cmd/batch \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/sp1500 ./cmd/sp1500 \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/scraper ./cmd/scraper \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/listings ./cmd/listings
 
 # ---- runtime ----
 FROM python:3.12-slim-bookworm
@@ -45,7 +48,7 @@ RUN python3 -m venv /venv \
 COPY worker/ ./worker/
 
 # Go binaries: `server` is the long-running entrypoint, the rest are one-off jobs
-# run with `docker compose run --rm app <scrape|classify|batch>`.
+# run with `docker compose run --rm app <sp1500|scraper|classify|scrape|batch|listings>`.
 COPY --from=build /out/ /usr/local/bin/
 
 # A named user for the default PUID 1000; compose overrides the uid via `user:`.

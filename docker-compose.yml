@@ -2,11 +2,12 @@
 # the SvelteKit UI (a second image). Data lives in ./data (gitignored) and
 # persists across recreations.
 #
-# The API is a long-running service; classify/scrape/batch are one-off jobs run
-# against the same image and volume:
-#   docker compose run --rm app classify -commit
-#   docker compose run --rm app scrape -slug twilio -vendor eightfold
-#   docker compose run --rm app batch
+# The API is a long-running service; the one-off jobs run against the same image
+# and volume, in order:
+#   docker compose run --rm app sp1500            # companies + career sites
+#   docker compose run --rm app classify -commit  # vendor classification
+#   docker compose run --rm app batch             # full scrape sweep (sequential)
+#   docker compose run --rm app scrape -slug twilio -vendor eightfold   # one company
 #
 # ./data must be writable by PUID (default 1000): the server and every one-off
 # job create and own jobs.db there. scripts/deploy.sh creates the directory and
@@ -67,7 +68,7 @@ services:
     depends_on:
       - app
     ports:
-      - "8095:8080"   # web UI: http://<nas-ip>:8095
+      - "8089:8080"   # web UI: http://<nas-ip>:8089
     environment:
       NODE_ENV: production
       # adapter-node defaults to 3000; the compose port mapping and healthcheck

@@ -112,8 +112,9 @@ fi
 
 echo
 echo "==> post-deploy checks passed"
+echo "    UI:   http://<nas-ip>:8089"
 echo "    API:  http://<nas-ip>:8094/api/runs"
-echo "    before a full sweep, classify every company once:"
-echo "      docker compose run --rm app classify -commit"
-echo "    then run the whole sweep (sequential, one company at a time):"
-echo "      docker compose run --rm app batch"
+echo "    a fresh data volume needs, in order:"
+echo "      docker compose run --rm app sp1500           # companies + career sites"
+echo "      docker compose run --rm app classify -commit # vendor classification"
+echo "      docker compose run --rm app batch            # full scrape sweep (sequential)"

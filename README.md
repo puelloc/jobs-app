@@ -53,8 +53,7 @@ go build ./... && go test ./...
 ## Deploy to the NAS (Docker)
 
 Two images: the Go API + browser-use worker (`Dockerfile`), and the SvelteKit UI (`web/Dockerfile`).
-`server` and the UI are long-running services; `classify`, `scrape`, and `batch` run as one-off jobs
-against the same `./data` volume.
+`server` and the UI are long-running services; the one-off jobs run against the same `./data` volume.
 
 ```
 ./scripts/deploy.sh          # git pull + rebuild + rolling restart + verify
@@ -62,20 +61,23 @@ against the same `./data` volume.
 
 That script handles the `PUID`/`PGID` ownership of `./data` (SQLite must be writable by the
 container user), rebuilds with `docker compose up -d --build --remove-orphans`, and reports any
-restart-loop or API failure. The API is on host port `8094`, the UI on `8095`.
+restart-loop or API failure. The API is on host port `8094`, the UI on `8089`.
 
-Run the scrape jobs from the repo root:
+A fresh `./data` volume starts empty, so populate it in order:
 
 ```
-docker compose run --rm app classify -commit                     # once, before any scrape
-docker compose run --rm app scrape -slug twilio -vendor eightfold  # one company
-docker compose run --rm app batch                                # full sweep, one company at a time
+docker compose run --rm app sp1500                                # 1. companies + career sites
+docker compose run --rm app classify -commit                      # 2. vendor classification
+docker compose run --rm app batch                                 # 3. full scrape sweep
 ```
 
-`batch` is the concurrency boundary: it never runs two scrapes at once, so SQLite sees one writer and
-the model host sees one browser agent. Before a full sweep, run `classify -commit` so every company
-has a recorded vendor (the scrape trigger refuses unclassified companies). The `./data` volume carries
-`jobs.db` and the per-run agent traces across recreations.
+`sp1500` writes the S&P 500/400/600 companies and resolves their careers URLs (the browser-use jobs
+cannot run without it). `classify -commit` records each company's applicant-tracking vendor (the
+scrape trigger refuses unclassified companies). `batch` then runs the browser-use listings scrape
+sequentially — one company at a time, so SQLite sees one writer and the model host sees one browser
+agent. `scrape -slug <slug> -vendor <vendor>` runs a single company instead, and `scraper` refreshes
+the separate RemoteOK job source. The `./data` volume carries `jobs.db` and the per-run agent traces
+across recreations.
 
 The UI talks to the API over the compose network (it proxies `/api/*` to `app:8080`); it does not
 need the API host port exposed, which is kept for direct `curl` use.
