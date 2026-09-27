@@ -218,6 +218,65 @@ def run_agent(request: dict[str, Any]) -> dict[str, Any]:
 
     max_steps = int(options.get("max_steps") or DEFAULT_MAX_STEPS)
 
+    # Live trace: when the caller asks for a trace file, append one JSON object per step (thought,
+    # next goal, actions) plus a final "done" object, so a long agent run can be watched as it
+    # happens. Tracing is best-effort: a trace that cannot be written never breaks the worker, and
+    # the one-process-per-request model means the OS closes the file when the process exits.
+    trace_file = str(request.get("trace_file") or "").strip()
+    trace_fh = None
+    if trace_file:
+        try:
+            trace_fh = open(trace_file, "a", encoding="utf-8")
+        except OSError as exc:  # noqa: BLE001 - reported, not raised
+            print(f"browser_worker: cannot open trace file {trace_file}: {exc}", file=sys.stderr)
+            trace_fh = None
+
+    def _emit_trace(event: dict) -> None:
+        if trace_fh is None:
+            return
+        try:
+            trace_fh.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+            trace_fh.flush()
+        except OSError:
+            pass  # tracing must never break the worker
+
+    def _action_summary(action) -> dict:
+        try:
+            d = action.model_dump(exclude_none=True)
+        except Exception:  # noqa: BLE001
+            d = {"raw": str(action)}
+        if isinstance(d, dict):
+            d.pop("interacted_element", None)
+        return d
+
+    def _on_step(state, output, step: int) -> None:
+        actions = getattr(output, "action", None) or []
+        if not isinstance(actions, (list, tuple)):
+            actions = [actions]
+        _emit_trace({
+            "event": "step",
+            "step": step,
+            "url": getattr(state, "url", ""),
+            "thinking": getattr(output, "thinking", None),
+            "evaluation_previous_goal": getattr(output, "evaluation_previous_goal", None),
+            "memory": getattr(output, "memory", None),
+            "next_goal": getattr(output, "next_goal", None),
+            "actions": [_action_summary(a) for a in actions],
+        })
+
+    def _on_done(history) -> None:
+        final = ""
+        try:
+            final = str(history.final_result() or "")
+        except Exception:  # noqa: BLE001
+            pass
+        _emit_trace({
+            "event": "done",
+            "success": bool(history.is_successful()),
+            "steps": int(history.number_of_steps()),
+            "final_result": final,
+        })
+
     async def _run(extra_args: list[str] | None) -> Any:
         llm = ChatOllama(**llm_kwargs)
         agent = Agent(
@@ -230,6 +289,8 @@ def run_agent(request: dict[str, Any]) -> dict[str, Any]:
             ),
             output_model_schema=AgentAnswer,
             use_vision=False,
+            register_new_step_callback=_on_step,
+            register_done_callback=_on_done,
         )
         return await agent.run(max_steps=max_steps)
 

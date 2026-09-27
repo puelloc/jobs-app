@@ -82,6 +82,9 @@ type Request struct {
 	TimeoutSeconds float64
 	MaxBodyBytes   int64
 	Agent          *AgentOptions
+	// TraceFile, when non-empty, is a path the worker appends one JSON object per agent step to, so
+	// a long agent run can be watched as it happens. The worker writes nothing when it is empty.
+	TraceFile string
 }
 
 // Result is one worker response.
@@ -258,6 +261,7 @@ type wireRequest struct {
 	TimeoutSeconds float64    `json:"timeout_seconds,omitempty"`
 	MaxBodyBytes   int64      `json:"max_body_bytes,omitempty"`
 	Agent          *wireAgent `json:"agent,omitempty"`
+	TraceFile      string     `json:"trace_file,omitempty"`
 }
 
 type wireAgent struct {
@@ -275,6 +279,7 @@ func toWireRequest(req Request) wireRequest {
 		CompanyName:    req.CompanyName,
 		TimeoutSeconds: req.TimeoutSeconds,
 		MaxBodyBytes:   req.MaxBodyBytes,
+		TraceFile:      req.TraceFile,
 	}
 	if req.Agent != nil {
 		out.Agent = &wireAgent{
