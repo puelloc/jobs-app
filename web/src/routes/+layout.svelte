@@ -1,12 +1,35 @@
 <script>
+	import { page } from '$app/state';
+
 	let { children } = $props();
+
+	const path = $derived(page.url.pathname);
+
+	// "Runs" owns the exact root; the directories own their whole subtree.
+	function isActive(match) {
+		return match === '/' ? path === '/' : path === match || path.startsWith(match + '/');
+	}
 </script>
 
 <div class="shell">
 	<header class="topbar">
 		<a href="/" class="brand">Jobs <span>dashboard</span></a>
 		<nav class="nav">
-			<a href="/" class="active" aria-current="page">Runs</a>
+			<a
+				href="/"
+				class:active={isActive('/')}
+				aria-current={isActive('/') ? 'page' : undefined}>Runs</a
+			>
+			<a
+				href="/companies"
+				class:active={isActive('/companies')}
+				aria-current={isActive('/companies') ? 'page' : undefined}>Companies</a
+			>
+			<a
+				href="/jobs"
+				class:active={isActive('/jobs')}
+				aria-current={isActive('/jobs') ? 'page' : undefined}>Jobs</a
+			>
 		</nav>
 	</header>
 	{@render children()}

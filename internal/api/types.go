@@ -90,6 +90,10 @@ type CompanyListItem struct {
 	CareerSiteSource *string `json:"career_site_source"`
 	// CareerSiteTitle is what makes a wrong pick visible in the list without opening the URL.
 	CareerSiteTitle *string `json:"career_site_title"`
+	// CareerSiteVerdict is the browser-validation pass's classification of the stored URL:
+	// "confirmed", "wrong" or "unverifiable". Null when no validation has judged the current URL
+	// (including an unresolved company, which has no URL to judge).
+	CareerSiteVerdict *string `json:"career_site_url_verdict"`
 	// AttemptCount is how many resolution attempts exist across all runs, so an unresolved company
 	// can be told apart from one that has never been looked at.
 	AttemptCount int64  `json:"attempt_count"`

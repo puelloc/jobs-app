@@ -64,3 +64,51 @@ async function getJSON(path, { origin = '' } = {}) {
 export async function getRuns({ limit = 100, offset = 0 } = {}, options = {}) {
 	return getJSON(`/api/runs?limit=${limit}&offset=${offset}`, options);
 }
+
+/**
+ * One page of companies plus the envelope's total. `index`, `resolution` and
+ * `search` are passed through verbatim: an empty value means "no filter".
+ * @param {{ limit?: number, offset?: number, index?: string, resolution?: string, search?: string }} [params]
+ * @param {{ origin?: string }} [options]
+ * @returns {Promise<{ companies: any[], limit: number, offset: number, total: number }>}
+ */
+export async function getCompanies(
+	{ limit = 25, offset = 0, index = '', resolution = '', search = '' } = {},
+	options = {}
+) {
+	const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+	if (index) query.set('index', index);
+	if (resolution) query.set('resolution', resolution);
+	if (search) query.set('search', search);
+	return getJSON(`/api/companies?${query.toString()}`, options);
+}
+
+/**
+ * One company plus its whole resolution-attempt trail.
+ * @param {number|string} id
+ * @param {{ origin?: string }} [options]
+ * @returns {Promise<{ company: any, attempts: any[] }>}
+ */
+export async function getCompany(id, options = {}) {
+	return getJSON(`/api/companies/${id}`, options);
+}
+
+/**
+ * One page of jobs plus the envelope's total.
+ * @param {{ limit?: number, offset?: number }} [paging]
+ * @param {{ origin?: string }} [options]
+ * @returns {Promise<{ jobs: any[], limit: number, offset: number, total: number }>}
+ */
+export async function getJobs({ limit = 25, offset = 0 } = {}, options = {}) {
+	return getJSON(`/api/jobs?limit=${limit}&offset=${offset}`, options);
+}
+
+/**
+ * One job: the list item plus description and the three URLs.
+ * @param {number|string} id
+ * @param {{ origin?: string }} [options]
+ * @returns {Promise<any>}
+ */
+export async function getJob(id, options = {}) {
+	return getJSON(`/api/jobs/${id}`, options);
+}

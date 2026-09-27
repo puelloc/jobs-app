@@ -26,7 +26,7 @@ one contributor among several, not a special case.
 | **`docs/scraping-plan.md`** | **the next workstream**: fetching listings from the resolved careers sites |
 | `docs/browser-use-worker.md` | the Go ↔ Python browser-use worker contract |
 | `internal/db/MIGRATIONS.md` | the migration conventions and the one-off script rule |
-| `web/README.md` | the runs dashboard |
+| `web/README.md` | the read-only web dashboard (runs, companies, jobs) |
 
 Run reports live in `docs/runs/`, one file per real-network run, with the numbers read back from the
 database rather than from a command's summary line.

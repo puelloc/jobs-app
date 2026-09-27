@@ -29,6 +29,9 @@ type CompanyRow struct {
 	// CareerSiteTitle is the document title of the accepted careers page, which is what makes a
 	// wrong pick visible without opening the URL.
 	CareerSiteTitle sql.NullString
+	// CareerSiteVerdict is the browser-validation pass's classification of the stored URL. Null when
+	// no validation has judged the current URL, or when there is no stored URL to judge.
+	CareerSiteVerdict sql.NullString
 	// AttemptCount is how many resolution attempts exist across all runs, so an unresolved company
 	// can be told apart from one that has never been looked at.
 	AttemptCount int64
@@ -91,6 +94,7 @@ func ListCompanies(ctx context.Context, q Querier, filter CompanyFilter, limit, 
 SELECT c.id, c.slug, c.name, c.industry, c.gics_sub_industry, c.headquarters_location,
        c.index_membership, c.website, c.website_source,
        c.career_site_url, c.career_site_url_source, c.career_site_url_title,
+       c.career_site_url_verdict,
        (SELECT count(*) FROM url_resolution_attempts a WHERE a.company_id = c.id) AS attempt_count,
        c.updated_at
   FROM companies c` + where + `
@@ -110,6 +114,7 @@ SELECT c.id, c.slug, c.name, c.industry, c.gics_sub_industry, c.headquarters_loc
 			&c.ID, &c.Slug, &c.Name, &c.Industry, &c.SubIndustry, &c.Headquarters,
 			&c.IndexMembership, &c.Website, &c.WebsiteSource,
 			&c.CareerSiteURL, &c.CareerSiteSource, &c.CareerSiteTitle,
+			&c.CareerSiteVerdict,
 			&c.AttemptCount, &c.UpdatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan company: %w", err)
@@ -223,6 +228,7 @@ func GetCompany(ctx context.Context, q Querier, id int64) (CompanyRow, error) {
 SELECT c.id, c.slug, c.name, c.industry, c.gics_sub_industry, c.headquarters_location,
        c.index_membership, c.website, c.website_source,
        c.career_site_url, c.career_site_url_source, c.career_site_url_title,
+       c.career_site_url_verdict,
        (SELECT count(*) FROM url_resolution_attempts a WHERE a.company_id = c.id),
        c.updated_at
   FROM companies c
@@ -233,6 +239,7 @@ SELECT c.id, c.slug, c.name, c.industry, c.gics_sub_industry, c.headquarters_loc
 		&c.ID, &c.Slug, &c.Name, &c.Industry, &c.SubIndustry, &c.Headquarters,
 		&c.IndexMembership, &c.Website, &c.WebsiteSource,
 		&c.CareerSiteURL, &c.CareerSiteSource, &c.CareerSiteTitle,
+		&c.CareerSiteVerdict,
 		&c.AttemptCount, &c.UpdatedAt,
 	)
 	if err != nil {

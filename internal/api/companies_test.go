@@ -14,20 +14,21 @@ import (
 // --- contract mirrors -----------------------------------------------------
 
 type companyJSON struct {
-	ID               int64   `json:"id"`
-	Slug             string  `json:"slug"`
-	Name             string  `json:"name"`
-	Industry         *string `json:"industry"`
-	SubIndustry      *string `json:"gics_sub_industry"`
-	Headquarters     *string `json:"headquarters_location"`
-	IndexMembership  *string `json:"index_membership"`
-	Website          *string `json:"website"`
-	WebsiteSource    *string `json:"website_source"`
-	CareerSiteURL    *string `json:"career_site_url"`
-	CareerSiteSource *string `json:"career_site_source"`
-	CareerSiteTitle  *string `json:"career_site_title"`
-	AttemptCount     int64   `json:"attempt_count"`
-	UpdatedAt        string  `json:"updated_at"`
+	ID                int64   `json:"id"`
+	Slug              string  `json:"slug"`
+	Name              string  `json:"name"`
+	Industry          *string `json:"industry"`
+	SubIndustry       *string `json:"gics_sub_industry"`
+	Headquarters      *string `json:"headquarters_location"`
+	IndexMembership   *string `json:"index_membership"`
+	Website           *string `json:"website"`
+	WebsiteSource     *string `json:"website_source"`
+	CareerSiteURL     *string `json:"career_site_url"`
+	CareerSiteSource  *string `json:"career_site_source"`
+	CareerSiteTitle   *string `json:"career_site_title"`
+	CareerSiteVerdict *string `json:"career_site_url_verdict"`
+	AttemptCount      int64   `json:"attempt_count"`
+	UpdatedAt         string  `json:"updated_at"`
 }
 
 type companyListJSON struct {
@@ -121,6 +122,7 @@ func TestCompaniesListNullsAreNullNotEmptyStrings(t *testing.T) {
 		"website": c.Website, "website_source": c.WebsiteSource,
 		"career_site_url": c.CareerSiteURL, "career_site_source": c.CareerSiteSource,
 		"career_site_title": c.CareerSiteTitle, "headquarters_location": c.Headquarters,
+		"career_site_url_verdict": c.CareerSiteVerdict,
 	} {
 		if ptr != nil {
 			t.Errorf("%s = %q, want null for a company with no resolution", name, *ptr)
@@ -128,6 +130,30 @@ func TestCompaniesListNullsAreNullNotEmptyStrings(t *testing.T) {
 	}
 	if c.AttemptCount != 0 {
 		t.Errorf("attempt_count = %d, want 0", c.AttemptCount)
+	}
+}
+
+// The verdict column reaches the wire: a validation pass's classification is exposed so the UI can
+// badge confirmed/wrong/unverifiable without reading every attempt.
+func TestCompaniesListExposesVerdict(t *testing.T) {
+	h, database := newTestServerAndDB(t)
+	if _, err := database.Exec(
+		`INSERT INTO companies (id, slug, name, career_site_url, career_site_url_verdict)
+		 VALUES (1, 'acme', 'Acme Corporation', 'https://acme.example.com/careers', 'confirmed')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	rec := do(t, h, "GET", "/api/companies")
+	requireJSON(t, rec)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	got := decodeCompanies(t, rec.Body.Bytes())
+	if len(got.Companies) != 1 {
+		t.Fatalf("companies = %d, want 1", len(got.Companies))
+	}
+	if c := got.Companies[0]; c.CareerSiteVerdict == nil || *c.CareerSiteVerdict != "confirmed" {
+		t.Errorf("career_site_url_verdict = %v, want confirmed", c.CareerSiteVerdict)
 	}
 }
 

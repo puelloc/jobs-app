@@ -186,20 +186,21 @@ func handleGetCompany(db *sql.DB) http.HandlerFunc {
 // values marshal to null rather than to a zero value the UI would have to guess about.
 func companyToWire(row store.CompanyRow) CompanyListItem {
 	return CompanyListItem{
-		ID:               row.ID,
-		Slug:             row.Slug,
-		Name:             row.Name,
-		Industry:         nullStringPtr(row.Industry),
-		SubIndustry:      nullStringPtr(row.SubIndustry),
-		Headquarters:     nullStringPtr(row.Headquarters),
-		IndexMembership:  nullStringPtr(row.IndexMembership),
-		Website:          nullStringPtr(row.Website),
-		WebsiteSource:    nullStringPtr(row.WebsiteSource),
-		CareerSiteURL:    nullStringPtr(row.CareerSiteURL),
-		CareerSiteSource: nullStringPtr(row.CareerSiteSource),
-		CareerSiteTitle:  nullStringPtr(row.CareerSiteTitle),
-		AttemptCount:     row.AttemptCount,
-		UpdatedAt:        row.UpdatedAt,
+		ID:                row.ID,
+		Slug:              row.Slug,
+		Name:              row.Name,
+		Industry:          nullStringPtr(row.Industry),
+		SubIndustry:       nullStringPtr(row.SubIndustry),
+		Headquarters:      nullStringPtr(row.Headquarters),
+		IndexMembership:   nullStringPtr(row.IndexMembership),
+		Website:           nullStringPtr(row.Website),
+		WebsiteSource:     nullStringPtr(row.WebsiteSource),
+		CareerSiteURL:     nullStringPtr(row.CareerSiteURL),
+		CareerSiteSource:  nullStringPtr(row.CareerSiteSource),
+		CareerSiteTitle:   nullStringPtr(row.CareerSiteTitle),
+		CareerSiteVerdict: nullStringPtr(row.CareerSiteVerdict),
+		AttemptCount:      row.AttemptCount,
+		UpdatedAt:         row.UpdatedAt,
 	}
 }
 

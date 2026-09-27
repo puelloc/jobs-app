@@ -1,11 +1,12 @@
 # Job viewer — v1 design
 
-> **Status: v1 design record, partly superseded.** The jobs list and jobs detail screens, and the
-> company directory, that this document designs are **not in the app today** — `web/` was replaced by
-> a runs dashboard (see `web/README.md`). The API contract below is a v1 snapshot too: the API now
-> also serves `GET /api/companies`, `/api/companies/{id}`, `/api/companies/churn` and `/api/runs`.
+> **Status: v1 design record, now implemented.** The jobs list/detail screens and the company
+> directory that this document designs **are built** in `web/` (see `web/README.md` for the current
+> app). The API contract below is a v1 snapshot; the live API has since also gained
+> `GET /api/companies`, `/api/companies/{id}`, `/api/companies/churn` and `/api/runs`, and the company
+> list item now carries `career_site_url_verdict`.
 >
-> What is **still live guidance**, and should be kept when the next screen is built:
+> What is **still live guidance**, and what the current screens follow:
 >
 > - the API ↔ UI boundary rules in "API ↔ UI boundaries" — the API owns the data contract, the UI owns
 >   presentation, and the UI must never compensate for an inconsistent API;
@@ -13,7 +14,8 @@
 >   fabricated default;
 > - errors are `{"error":{"code","message"}}` and the message is for the operator, not for parsing.
 >
-> Treat the screen descriptions below as history rather than as specification.
+> The screen descriptions below are the design those screens were built from, not a line-by-line
+> description of the current app.
 
 ## Purpose
 
