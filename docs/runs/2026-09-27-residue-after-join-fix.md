@@ -98,3 +98,24 @@ The next honest step is a validation sweep over the newly stored URLs, not anoth
 A browser-validation sweep (`sp1500 validate`) is being run separately against a copy of the
 database; its verdicts were computed against URLs resolved by the *broken* tier 1, so it should be
 re-run after this result to include the recovered companies.
+
+## Decisions taken on 2026-09-27 (recorded here pending a plan update)
+
+§12 of `docs/sp1500-plan.md` still carries the tier-1 item as the next action, and this report
+deliberately does not edit that file: another agent held uncommitted changes to it at the time, and a
+write from a pre-`76d9194` buffer would have reverted the close-out. The three decisions below are
+recorded here so they are not lost in the meantime.
+
+1. **Do not validate the 202 new URLs yet.** 834 therefore stands as an explicitly *stored* count,
+   with no working-share figure claimed for the new values. This is a decision, not an oversight -
+   the 202 have not been fetched and classified, and the number should not be read as 834 working
+   careers pages.
+2. **Do not build the SearXNG tier yet** (Phase A). `SEARXNG_URL` is configured and `format=json`
+   works through the reverse proxy, but the client, the `Source='searxng'` value and the M/N decision
+   rule are unwritten. Rationale: the join fix recovered 202 companies, and the remaining residue is
+   now dominated by 242 rows with no Wikipedia article at all - a set a search engine cannot help
+   with either, because there is nothing to search *for*. Revisit only if the 379
+   homepage-without-a-careers-page set turns out to be worth attacking.
+3. **Re-run the browser-validation sweep after this result** before relying on its §8.1 browser-use
+   justification, because its current verdicts were computed against URLs resolved by the broken
+   tier 1.
