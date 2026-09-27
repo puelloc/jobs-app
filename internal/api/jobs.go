@@ -29,8 +29,8 @@ type jobSpec struct {
 
 var triggerableJobs = map[string]jobSpec{
 	"sp1500":   {bin: "sp1500", platform: "career_bootstrap"},
-	"resolve":  {bin: "sp1500", platform: "career_resolution", args: []string{"resolve"}},
-	"validate": {bin: "sp1500", platform: "career_validation", args: []string{"validate"}},
+	"resolve":  {bin: "sp1500", platform: "career_resolution", args: []string{"resolve", "-progress"}},
+	"validate": {bin: "sp1500", platform: "career_validation", args: []string{"validate", "-progress"}},
 	"classify": {bin: "classify", platform: "career_classify", args: []string{"-commit"}},
 	"batch":    {bin: "batch", platform: "career_batch"},
 	"scraper":  {bin: "scraper", platform: "remoteok"},

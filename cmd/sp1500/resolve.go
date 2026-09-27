@@ -43,6 +43,7 @@ type resolveFlags struct {
 	dryRun        bool
 	userAgent     string
 	baseURL       string
+	progress      bool
 	help          bool
 }
 
@@ -65,6 +66,7 @@ func parseResolveFlags(args []string, stderr io.Writer) (resolveFlags, error) {
 	fs.BoolVar(&f.dryRun, "dry-run", false, "record attempts but change no company")
 	fs.StringVar(&f.userAgent, "user-agent", "", "override the configured User-Agent")
 	fs.StringVar(&f.baseURL, "base-url", "", "override the API host (used by tests and mirrors)")
+	fs.BoolVar(&f.progress, "progress", false, "print one line per company to stderr as it is resolved")
 	fs.BoolVar(&f.help, "help", false, "print usage")
 
 	if err := fs.Parse(args); err != nil {
@@ -194,6 +196,7 @@ func runResolve(args []string, stdout, stderr io.Writer) int {
 		Concurrency:      flags.concurrency,
 		DataDir:          cfg.DataDir,
 		ResolveHomepages: resolveHomepages,
+		Progress:         resolveProgressWriter(flags.progress, stderr),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "run=%d status=error step=run err=%q exit=%d\n",
@@ -254,4 +257,24 @@ func formatSummaryLine(summary runresolve.Summary, dryRun bool) string {
 		"run_id=%d dry_run=%d companies=%d resolved=%d unresolved=%d skipped=%d failed=%d duration_ms=%d",
 		summary.RunID, boolToInt(dryRun), summary.Found, summary.Resolved, summary.Unresolved,
 		summary.Skipped, summary.Failed, summary.Duration.Milliseconds())
+}
+
+// resolveProgressWriter returns the per-company reporter, or nil when progress is off. One line per
+// company to stderr, so the stdout success line stays exactly one line; a sweep of 1,500 companies
+// runs for a long time and silence for an hour is indistinguishable from a hang.
+func resolveProgressWriter(enabled bool, w io.Writer) func(runresolve.Progress) {
+	if !enabled {
+		return nil
+	}
+	return func(p runresolve.Progress) {
+		if p.Err != nil {
+			fmt.Fprintf(w, "company=%s status=error err=%q\n", p.Slug, singleLine(p.Err.Error()))
+			return
+		}
+		status := "unresolved"
+		if p.Resolved {
+			status = "resolved"
+		}
+		fmt.Fprintf(w, "company=%s status=%s\n", p.Slug, status)
+	}
 }

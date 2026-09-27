@@ -62,6 +62,16 @@ type Options struct {
 	Concurrency int
 	// DataDir is where evidence is written.
 	DataDir string
+	// Progress, when set, is called once per company as its result lands. It is called from the
+	// single run goroutine, so the callback need not be concurrency-safe.
+	Progress func(Progress)
+}
+
+// Progress is one company's resolution outcome, reported as it lands.
+type Progress struct {
+	Slug     string
+	Resolved bool
+	Err      error
 }
 
 // Summary is what a completed run did. The counters match scrape_runs.
@@ -159,6 +169,9 @@ func (r Runner) Run(ctx context.Context, companies []Company, opts Options) (Sum
 			if sum.FirstError == "" {
 				sum.FirstError = fmt.Sprintf("%s: %v", c.Slug, err)
 			}
+			if opts.Progress != nil {
+				opts.Progress(Progress{Slug: c.Slug, Err: err})
+			}
 			continue
 		}
 
@@ -168,6 +181,9 @@ func (r Runner) Run(ctx context.Context, companies []Company, opts Options) (Sum
 			sum.Failed++
 			if sum.FirstError == "" {
 				sum.FirstError = fmt.Sprintf("%s: %v", c.Slug, err)
+			}
+			if opts.Progress != nil {
+				opts.Progress(Progress{Slug: c.Slug, Err: err})
 			}
 			continue
 		}
@@ -181,6 +197,9 @@ func (r Runner) Run(ctx context.Context, companies []Company, opts Options) (Sum
 			sum.Resolved++
 		} else {
 			sum.Unresolved++
+		}
+		if opts.Progress != nil {
+			opts.Progress(Progress{Slug: c.Slug, Resolved: res.Resolved()})
 		}
 	}
 

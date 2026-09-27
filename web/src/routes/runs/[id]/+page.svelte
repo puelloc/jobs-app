@@ -16,6 +16,12 @@
 	const log = $derived(data.log?.log ?? '');
 	const logPresent = $derived(data.log?.present ?? false);
 	const isAgentRun = $derived(run.platform === 'career_listings');
+	// These jobs record their own run but tee their output into the server log, not a per-run file.
+	const isSelfTracked = $derived(
+		['career_resolution', 'career_validation', 'remoteok', 'wikipedia_sp500', 'wikipedia_sp400', 'wikipedia_sp600'].includes(
+			run.platform
+		)
+	);
 
 	// Poll the load function so live agent steps and a status change show up
 	// without a manual refresh. invalidate() re-runs load on the client only.
@@ -80,7 +86,9 @@
 
 	<section class="section">
 		<h2>Output</h2>
-		{#if !logPresent || !log}
+		{#if isSelfTracked}
+			<p class="quiet">This job writes its output to the <a href="/logs">server log</a>.</p>
+		{:else if !logPresent || !log}
 			<p class="quiet">No output yet.</p>
 		{:else}
 			<pre class="log">{log}</pre>
