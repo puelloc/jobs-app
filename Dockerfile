@@ -45,7 +45,10 @@ RUN python3 -m venv /venv \
 
 # Worker scripts + vendor playbooks. cmd/scrape and cmd/classify resolve these
 # relative to the working directory (/app), so the layout must match the repo.
+# chmod: the build context may carry them 0600 (a dev checkout), but the container
+# runs as a non-root uid and must read them.
 COPY worker/ ./worker/
+RUN chmod -R a+rX /app/worker
 
 # Go binaries: `server` is the long-running entrypoint, the rest are one-off jobs
 # run with `docker compose run --rm app <sp1500|scraper|classify|scrape|batch|listings>`.
