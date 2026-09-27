@@ -11,7 +11,7 @@ import (
 // change the outcome.
 func cleanEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"DB_PATH", "DATA_DIR", "REMOTEOK_ENDPOINT", "USER_AGENT", "HTTP_TIMEOUT", "LOG_LEVEL"} {
+	for _, k := range []string{"DB_PATH", "DATA_DIR", "REMOTEOK_ENDPOINT", "USER_AGENT", "HTTP_TIMEOUT", "LOG_LEVEL", "SEARXNG_URL"} {
 		t.Setenv(k, "")
 	}
 }
@@ -193,5 +193,86 @@ func TestLoadPerformsNoIO(t *testing.T) {
 
 	if _, err := Load(); err != nil {
 		t.Fatalf("Load returned %v, want no I/O and therefore no error", err)
+	}
+}
+
+// SearXNG is an optional dependency: the searxng resolve phase must be able to
+// run in a deployment that has no SearXNG at all, so an unset URL is valid and
+// means "disabled" rather than an error.
+func TestLoadAllowsMissingSearxngURL(t *testing.T) {
+	cleanEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SearxngURL != "" {
+		t.Errorf("SearxngURL = %q, want empty when SEARXNG_URL is unset", cfg.SearxngURL)
+	}
+	if cfg.SearxngEnabled() {
+		t.Error("SearxngEnabled() = true with no URL, want false")
+	}
+}
+
+func TestLoadReadsSearxngURL(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("SEARXNG_URL", "https://search.siggy-lab.org")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SearxngURL != "https://search.siggy-lab.org" {
+		t.Errorf("SearxngURL = %q", cfg.SearxngURL)
+	}
+	if !cfg.SearxngEnabled() {
+		t.Error("SearxngEnabled() = false with a URL set, want true")
+	}
+}
+
+// design: Run lifecycle step 1 - a bad value exits here with no DB trace.
+func TestLoadRejectsBadSearxngURL(t *testing.T) {
+	for _, tc := range []struct{ name, value string }{
+		{"relative", "/search"},
+		{"no host", "https://"},
+		{"unsupported scheme", "ftp://search.test"},
+		{"scheme only", "http://"},
+		{"garbage", "://nope"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cleanEnv(t)
+			t.Setenv("SEARXNG_URL", tc.value)
+			if _, err := Load(); err == nil {
+				t.Errorf("Load accepted SEARXNG_URL=%q, want an error", tc.value)
+			}
+		})
+	}
+}
+
+func TestLoadSearxngErrorMentionsTheVariable(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("SEARXNG_URL", "ftp://search.test")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if !strings.Contains(err.Error(), "SEARXNG_URL") {
+		t.Errorf("error = %q, want it to name SEARXNG_URL so an operator can fix it", err)
+	}
+}
+
+// A trailing slash would produce https://host//search, which some reverse
+// proxies do not normalise. Load trims it so callers can concatenate safely.
+func TestLoadTrimsTrailingSlashFromSearxngURL(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("SEARXNG_URL", "https://search.siggy-lab.org/")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SearxngURL != "https://search.siggy-lab.org" {
+		t.Errorf("SearxngURL = %q, want the trailing slash trimmed", cfg.SearxngURL)
 	}
 }

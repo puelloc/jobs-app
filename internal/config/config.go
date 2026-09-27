@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -37,7 +38,16 @@ type Config struct {
 	HTTPTimeout time.Duration
 	LogLevel    string
 	ServerAddr  string
+
+	// SearxngURL is the base URL of a SearXNG instance, e.g.
+	// https://search.siggy-lab.org. Empty means the searxng resolve phase is
+	// disabled: SearXNG is an optional dependency, not a required one. The value
+	// is stored with any trailing slash trimmed.
+	SearxngURL string
 }
+
+// SearxngEnabled reports whether a SearXNG instance is configured.
+func (c Config) SearxngEnabled() bool { return c.SearxngURL != "" }
 
 // Load resolves configuration from the environment, applying the documented
 // defaults. An empty string is treated as unset. It performs no I/O.
@@ -50,6 +60,7 @@ func Load() (Config, error) {
 		LogLevel:    envOrDefault("LOG_LEVEL", DefaultLogLevel),
 		ServerAddr:  envOrDefault("SERVER_ADDR", DefaultServerAddr),
 		HTTPTimeout: DefaultHTTPTimeout,
+		SearxngURL:  strings.TrimSuffix(envOrDefault("SEARXNG_URL", ""), "/"),
 	}
 
 	// design: Run lifecycle step 1 - a bad value exits here with no DB trace.
@@ -80,15 +91,15 @@ func (c Config) validate() error {
 	if c.Endpoint == "" {
 		return fmt.Errorf("REMOTEOK_ENDPOINT must not be empty")
 	}
-	u, err := url.Parse(c.Endpoint)
-	if err != nil {
-		return fmt.Errorf("REMOTEOK_ENDPOINT %q is not a valid URL: %w", c.Endpoint, err)
+	if err := validateHTTPURL("REMOTEOK_ENDPOINT", c.Endpoint); err != nil {
+		return err
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("REMOTEOK_ENDPOINT %q must be an absolute http or https URL, got scheme %q", c.Endpoint, u.Scheme)
-	}
-	if u.Host == "" {
-		return fmt.Errorf("REMOTEOK_ENDPOINT %q has no host", c.Endpoint)
+	// SEARXNG_URL is optional; only a value that is present must be well formed.
+	// A malformed one is still fatal here, at startup, with no DB trace.
+	if c.SearxngURL != "" {
+		if err := validateHTTPURL("SEARXNG_URL", c.SearxngURL); err != nil {
+			return err
+		}
 	}
 	if c.UserAgent == "" {
 		return fmt.Errorf("USER_AGENT must not be empty")
@@ -108,4 +119,21 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// validateHTTPURL checks that raw is an absolute http or https URL with a host.
+// name is the environment variable, and appears in every message so an operator
+// can tell which setting is wrong.
+func validateHTTPURL(name, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%s %q is not a valid URL: %w", name, raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%s %q must be an absolute http or https URL, got scheme %q", name, raw, u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%s %q has no host", name, raw)
+	}
+	return nil
 }
