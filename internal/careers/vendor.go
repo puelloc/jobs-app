@@ -84,3 +84,18 @@ func vendorFromHTML(html string) string {
 	}
 	return ""
 }
+
+// NextHopURL returns the best candidate for the job-listings board linked from a first-party careers
+// page, or "" when none is found. It is the code half of the "one hop": when a stored career_site_url
+// does not itself reveal the vendor (the board is a first-party subdomain like jobs.<company>.com),
+// the board is usually one link away. It reuses the resolution ladder's ranked Extract, skipping the
+// current page because the input is already the careers page and the hop is to its board.
+func NextHopURL(baseURL, html string) string {
+	base := NormaliseURL(baseURL)
+	for _, c := range Extract(baseURL, html) {
+		if NormaliseURL(c.URL) != base {
+			return c.URL
+		}
+	}
+	return ""
+}

@@ -45,6 +45,24 @@ func TestFingerprint_ByHTML(t *testing.T) {
 	}
 }
 
+func TestNextHopURL(t *testing.T) {
+	const base = "https://www.acme.com/en-us/careers"
+	cases := []struct {
+		html string
+		want string
+	}{
+		{`<a href="https://jobs.acme.com/careers">See all open positions</a>`, "https://jobs.acme.com/careers"},
+		{`<a href="/jobs">Jobs</a>`, "https://www.acme.com/jobs"},
+		{`<a href="/about">About us</a>`, ""},
+		{`<a href="/en-us/careers">Careers</a>`, ""}, // the current page
+	}
+	for _, c := range cases {
+		if got := NextHopURL(base, c.html); got != c.want {
+			t.Errorf("NextHopURL(%q, %q) = %q, want %q", base, c.html, got, c.want)
+		}
+	}
+}
+
 func TestFingerprint_HostWinsOverHTML(t *testing.T) {
 	// A redirect to a vendor host beats any DOM signature on the page body.
 	got := Fingerprint("https://acme.icims.com/jobs", `<input data-testid="position-query-search-search">`)
