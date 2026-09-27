@@ -26,6 +26,7 @@ func NewRouter(db *sql.DB, dataDir string, scrapeCmd []string) http.Handler {
 	mux.HandleFunc("GET /api/companies/churn", handleListChurn(db))
 	mux.HandleFunc("GET /api/companies/{id}", handleGetCompany(db))
 	mux.HandleFunc("GET /api/runs", handleListRuns(db))
+	mux.HandleFunc("GET /api/runs/{id}", handleGetRun(db))
 	mux.HandleFunc("GET /api/traces/{id}", handleGetTrace(dataDir))
 	mux.HandleFunc("POST /api/companies/{id}/scrape", handleScrapeCompany(db, scrapeCmd, &scrapeGate{}))
 

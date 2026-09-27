@@ -168,6 +168,38 @@ export function formatValidationStatus(status) {
 }
 
 /**
+ * One browser-use agent action as a readable line. An action is a single-key
+ * object like { navigate: { url: "https://…" } }; this prefers the action name
+ * plus the url/text it carries, falling back to compact JSON for anything else.
+ * @param {any} action
+ * @returns {string}
+ */
+export function formatTraceAction(action) {
+	if (action === null || action === undefined) return '';
+	if (typeof action !== 'object') return String(action);
+
+	const entries = Object.entries(action);
+	if (entries.length === 1) {
+		const [name, params] = entries[0];
+		if (params && typeof params === 'object' && !Array.isArray(params)) {
+			const url = params.url ?? params.href ?? '';
+			const text = params.text ?? '';
+			if (url) return `${name} ${url}`;
+			if (text) return `${name} ${text}`;
+		}
+		if (params === null || params === undefined) return name;
+		if (typeof params === 'string' || typeof params === 'number' || typeof params === 'boolean') {
+			return `${name} ${params}`;
+		}
+	}
+	try {
+		return JSON.stringify(action);
+	} catch {
+		return String(action);
+	}
+}
+
+/**
  * Human label for a job's location: the free-text location, else the country,
  * else "Remote" when the job is remote, else empty (the segment is dropped).
  * @param {{ location_text?: string|null, country?: string|null, is_remote?: boolean }} job

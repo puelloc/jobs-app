@@ -1,4 +1,5 @@
 <script>
+	import { postScrape } from '$lib/api.js';
 	import {
 		NOT_STATED,
 		formatAttemptCount,
@@ -14,6 +15,24 @@
 	const company = $derived(data.company);
 	const attempts = $derived(data.attempts ?? []);
 	const verdict = $derived(company.career_site_url_verdict ?? null);
+	const vendor = $derived(data.vendor ?? null);
+
+	let pending = $state(false);
+	let startedRun = $state(null);
+	let scrapeError = $state('');
+
+	async function triggerScrape() {
+		pending = true;
+		scrapeError = '';
+		startedRun = null;
+		try {
+			startedRun = await postScrape(company.id);
+		} catch (failure) {
+			scrapeError = failure?.message ?? 'The scrape could not be started';
+		} finally {
+			pending = false;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -59,6 +78,31 @@
 				<dd>{formatVerdict(verdict)}</dd>
 			</div>
 		</dl>
+	</section>
+
+	<section class="section">
+		<h2>Scrape</h2>
+		{#if !vendor}
+			<p class="hint">
+				Not classified. Run <code>classify -commit</code> before scraping this company.
+			</p>
+		{:else}
+			<p class="hint">
+				Classified vendor: {vendor}. Scrapes remote-US software-engineering postings into
+				job_listings.
+			</p>
+		{/if}
+		<button class="scrape" disabled={!vendor || pending} onclick={triggerScrape}>
+			{pending ? 'Starting…' : 'Scrape remote-US jobs'}
+		</button>
+		{#if startedRun}
+			<p class="ok">
+				Run started — <a href={`/runs/${startedRun.run_id}`}>watch #{startedRun.run_id}</a>.
+			</p>
+		{/if}
+		{#if scrapeError}
+			<p class="error">{scrapeError}</p>
+		{/if}
 	</section>
 
 	<section class="section">
@@ -319,6 +363,48 @@
 	.empty {
 		margin: 0;
 		color: #6b7178;
+	}
+
+	.hint {
+		margin: 0 0 0.6rem;
+		color: #6b7178;
+		font-size: 0.85rem;
+	}
+
+	.hint code {
+		padding: 0.05rem 0.3rem;
+		background: #eef0f3;
+		border-radius: 4px;
+	}
+
+	.scrape {
+		padding: 0.45rem 0.9rem;
+		border: 1px solid #1a7f37;
+		border-radius: 6px;
+		background: #1a7f37;
+		color: #ffffff;
+		font-size: 0.9rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.scrape:disabled {
+		background: #e4e7ec;
+		border-color: #e4e7ec;
+		color: #8a9099;
+		cursor: not-allowed;
+	}
+
+	.ok {
+		margin: 0.6rem 0 0;
+		color: #1a7f37;
+		font-size: 0.85rem;
+	}
+
+	.error {
+		margin: 0.6rem 0 0;
+		color: #c62828;
+		font-size: 0.85rem;
 	}
 
 	.back {

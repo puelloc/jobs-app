@@ -211,3 +211,32 @@ func TestListRuns_HonorsLimitAndOffset(t *testing.T) {
 		t.Errorf("runs = %v, want exactly run 2 (the middle row)", got.Runs)
 	}
 }
+
+// --- single run endpoint ----------------------------------------------------
+
+func TestGetRun_ReturnsOneRun(t *testing.T) {
+	rec := do(t, seedRunsDB(t), http.MethodGet, "/api/runs/2")
+	requireStatus(t, rec, http.StatusOK)
+	requireJSON(t, rec)
+
+	var got runJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	if got.ID != 2 || got.Status != "running" {
+		t.Errorf("run = id %d status %q, want 2 / running", got.ID, got.Status)
+	}
+	if got.FinishedAt != nil {
+		t.Errorf("run 2 finished_at = %q, want null while running", *got.FinishedAt)
+	}
+}
+
+func TestGetRun_MissingIs404(t *testing.T) {
+	rec := do(t, seedRunsDB(t), http.MethodGet, "/api/runs/999")
+	requireError(t, rec, http.StatusNotFound, "not_found")
+}
+
+func TestGetRun_NonIntegerIs400(t *testing.T) {
+	rec := do(t, seedRunsDB(t), http.MethodGet, "/api/runs/abc")
+	requireError(t, rec, http.StatusBadRequest, "bad_request")
+}

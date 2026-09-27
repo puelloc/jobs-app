@@ -73,6 +73,12 @@ func scanRun(s rowScanner) (RunRow, error) {
 	return r, nil
 }
 
+// GetRun returns one run by id, or sql.ErrNoRows when no such run exists.
+func GetRun(ctx context.Context, q Querier, id int64) (RunRow, error) {
+	row := q.QueryRowContext(ctx, runSelect+` WHERE r.id = ?`, id)
+	return scanRun(row)
+}
+
 // ListRuns returns one page of runs, newest first, plus the total number of
 // rows. The count and the page are two separate reads rather than one
 // transaction, for the same reason ListJobs does it that way: the viewer is

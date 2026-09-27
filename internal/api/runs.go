@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"jobsapp/internal/store"
 )
@@ -61,6 +62,35 @@ func handleListRuns(db *sql.DB) http.HandlerFunc {
 			Offset: offset,
 			Total:  total,
 		})
+	}
+}
+
+// handleGetRun serves GET /api/runs/{id}: one run, so the run detail page can show its status and
+// link to its trace.
+func handleGetRun(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, codeBadRequest, "run id must be an integer")
+			return
+		}
+
+		row, err := store.GetRun(r.Context(), db, id)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				writeError(w, http.StatusNotFound, codeNotFound, fmt.Sprintf("no run with id %d", id))
+				return
+			}
+			writeInternalError(w, fmt.Errorf("get run %d: %w", id, err))
+			return
+		}
+
+		item, err := runToWire(row)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
 	}
 }
 

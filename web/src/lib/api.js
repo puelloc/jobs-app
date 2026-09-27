@@ -1,6 +1,6 @@
 /**
- * The only place this app talks to the Go API. Every call is a GET: the viewer
- * is read-only, so there is no write path here at all.
+ * The only place this app talks to the Go API. Every read is a GET; the one
+ * write is POST /api/companies/{id}/scrape, which the scrape button fires.
  *
  * No retries, no timeouts beyond the browser's own, and no reactive state -
  * load() functions import this module and nothing else does.
@@ -16,16 +16,16 @@
  */
 
 /**
- * GET one JSON endpoint and either resolve with the parsed body or reject with
+ * One request to the Go API, resolving with the parsed body or rejecting with
  * the { status, code, message } shape the routes turn into error pages.
- * @param {string} path
- * @param {{ origin?: string }} [options]
+ * @param {string} method
+ * @param {string} url
  * @returns {Promise<any>}
  */
-async function getJSON(path, { origin = '' } = {}) {
+async function request(method, url) {
 	let res;
 	try {
-		res = await fetch(`${origin}${path}`, { headers: { Accept: 'application/json' } });
+		res = await fetch(url, { method, headers: { Accept: 'application/json' } });
 	} catch {
 		// The Go server is not running, or the proxy target refused the
 		// connection. The page still has to render something honest.
@@ -53,6 +53,26 @@ async function getJSON(path, { origin = '' } = {}) {
 	}
 
 	return await res.json();
+}
+
+/**
+ * GET one JSON endpoint.
+ * @param {string} path
+ * @param {{ origin?: string }} [options]
+ * @returns {Promise<any>}
+ */
+async function getJSON(path, { origin = '' } = {}) {
+	return request('GET', `${origin}${path}`);
+}
+
+/**
+ * POST one JSON endpoint (the single write path). Client-side only: a scrape
+ * trigger is a user action, never a server-render side effect.
+ * @param {string} path
+ * @returns {Promise<any>}
+ */
+async function postJSON(path) {
+	return request('POST', path);
 }
 
 /**
@@ -111,4 +131,35 @@ export async function getJobs({ limit = 25, offset = 0 } = {}, options = {}) {
  */
 export async function getJob(id, options = {}) {
 	return getJSON(`/api/jobs/${id}`, options);
+}
+
+/**
+ * Trigger one company's listings scrape. Rejects with the API's own message on
+ * 400 (not classified) and 409 (a scrape is already running).
+ * @param {number|string} id
+ * @returns {Promise<{ run_id: number }>}
+ */
+export async function postScrape(id) {
+	return postJSON(`/api/companies/${id}/scrape`);
+}
+
+/**
+ * One run by id (the run detail page's header: status, counters, error text).
+ * @param {number|string} id
+ * @param {{ origin?: string }} [options]
+ * @returns {Promise<any>}
+ */
+export async function getRun(id, options = {}) {
+	return getJSON(`/api/runs/${id}`, options);
+}
+
+/**
+ * The live agent trace for a run: the step/done events written so far. A run
+ * with no trace yet (or a non-agent run) resolves with present=false.
+ * @param {number|string} id
+ * @param {{ origin?: string }} [options]
+ * @returns {Promise<{ id: string, present: boolean, events: any[] }>}
+ */
+export async function getTrace(id, options = {}) {
+	return getJSON(`/api/traces/${id}`, options);
 }

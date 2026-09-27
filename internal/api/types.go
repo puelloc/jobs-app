@@ -138,6 +138,10 @@ type CompanyAttempt struct {
 type CompanyDetailResponse struct {
 	Company  CompanyListItem  `json:"company"`
 	Attempts []CompanyAttempt `json:"attempts"`
+	// Vendor is the classified applicant-tracking vendor (e.g. "eightfold"), or null when the
+	// company has not been classified yet — in which case POST /api/companies/{id}/scrape would be
+	// refused. Exposed so the UI can disable the scrape button ahead of the request.
+	Vendor *string `json:"vendor"`
 }
 
 // --- resolution churn -----------------------------------------------------

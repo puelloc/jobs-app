@@ -106,3 +106,29 @@ func TestListRuns_EmptyIsNonNil(t *testing.T) {
 		t.Error("runs is nil, want a non-nil empty slice")
 	}
 }
+
+func TestGetRun_ReturnsOneRun(t *testing.T) {
+	database := newTestDB(t)
+	ctx := context.Background()
+
+	seedRun(t, database, 1, "2026-09-27T01:00:00.000Z", "2026-09-27T01:00:05.000Z", "ok", nil)
+	seedRun(t, database, 2, "2026-09-27T01:10:00.000Z", nil, "running", nil)
+
+	got, err := GetRun(ctx, database, 2)
+	if err != nil {
+		t.Fatalf("GetRun(2): %v", err)
+	}
+	if got.ID != 2 || got.Status != "running" {
+		t.Errorf("GetRun(2) = id %d status %q, want 2 / running", got.ID, got.Status)
+	}
+	if got.FinishedAt.Valid {
+		t.Errorf("GetRun(2) finished_at = %q, want NULL while running", got.FinishedAt.String)
+	}
+}
+
+func TestGetRun_MissingIsNoRows(t *testing.T) {
+	database := newTestDB(t)
+	if _, err := GetRun(context.Background(), database, 999); err != sql.ErrNoRows {
+		t.Errorf("GetRun(999) err = %v, want sql.ErrNoRows", err)
+	}
+}

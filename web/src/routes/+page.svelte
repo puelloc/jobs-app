@@ -43,6 +43,7 @@
 						<div class="run-main">
 							<span class="platform">{run.platform}</span>
 							<span class="badge badge-running">Running</span>
+							<a class="view" href={`/runs/${run.id}`}>watch →</a>
 						</div>
 						<div class="meta">started {formatUtc(run.started_at)} · #{run.id}</div>
 					</li>
@@ -62,6 +63,7 @@
 						<div class="run-main">
 							<span class="platform">{run.platform}</span>
 							<span class="badge badge-{run.status}">{formatRunStatus(run.status)}</span>
+							<a class="view" href={`/runs/${run.id}`}>view →</a>
 						</div>
 						<div class="meta">
 							<span>#{run.id}</span>
@@ -164,6 +166,13 @@
 
 	.platform {
 		font-weight: 600;
+	}
+
+	.view {
+		margin-left: auto;
+		color: #6b7178;
+		font-size: 0.82rem;
+		white-space: nowrap;
 	}
 
 	.badge {

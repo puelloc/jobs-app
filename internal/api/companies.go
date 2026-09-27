@@ -171,6 +171,15 @@ func handleGetCompany(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// The classified vendor, when present, tells the UI whether a scrape can be triggered.
+		var vendor *string
+		if v, err := store.VendorNameForCompany(r.Context(), db, id); err == nil {
+			vendor = &v
+		} else if err != sql.ErrNoRows {
+			writeInternalError(w, fmt.Errorf("vendor for company %d: %w", id, err))
+			return
+		}
+
 		wire := make([]CompanyAttempt, 0, len(attempts))
 		for _, a := range attempts {
 			wire = append(wire, attemptToWire(a))
@@ -178,6 +187,7 @@ func handleGetCompany(db *sql.DB) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, CompanyDetailResponse{
 			Company:  companyToWire(row),
 			Attempts: wire,
+			Vendor:   vendor,
 		})
 	}
 }

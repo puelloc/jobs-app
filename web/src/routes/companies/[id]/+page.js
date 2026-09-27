@@ -14,5 +14,5 @@ export async function load({ params, url, depends }) {
 		error(failure?.status ?? 500, failure?.message ?? 'Could not load company');
 	}
 
-	return { company: data.company, attempts: data.attempts };
+	return { company: data.company, attempts: data.attempts, vendor: data.vendor ?? null };
 }

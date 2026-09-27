@@ -57,6 +57,7 @@ type attemptJSON struct {
 type companyDetailJSON struct {
 	Company  companyJSON   `json:"company"`
 	Attempts []attemptJSON `json:"attempts"`
+	Vendor   *string       `json:"vendor"`
 }
 
 type churnEndpointJSON struct {
@@ -258,6 +259,43 @@ VALUES
 	}
 	if accepted.RunID == nil || *accepted.RunID != 9 {
 		t.Errorf("run_id = %v, want 9", accepted.RunID)
+	}
+}
+
+// The detail endpoint exposes the classified vendor (null when unclassified) so the UI can enable
+// or disable the scrape trigger before making the request.
+func TestCompanyDetailExposesVendor(t *testing.T) {
+	h, database := newTestServerAndDB(t)
+	if _, err := database.Exec(
+		`INSERT INTO companies (id, slug, name) VALUES (1, 'acme', 'Acme Corporation')`); err != nil {
+		t.Fatalf("seed company: %v", err)
+	}
+
+	// Unclassified: vendor is null.
+	rec := do(t, h, "GET", "/api/companies/1")
+	requireJSON(t, rec)
+	var unclassified companyDetailJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &unclassified); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if unclassified.Vendor != nil {
+		t.Errorf("unclassified vendor = %q, want null", *unclassified.Vendor)
+	}
+
+	// Classified as eightfold (platform 31): vendor is the platform name.
+	if _, err := database.Exec(
+		`INSERT INTO company_application_platforms (company_id, platform_id, base_url)
+		 VALUES (1, 31, 'https://jobs.acme.com')`); err != nil {
+		t.Fatalf("seed classification: %v", err)
+	}
+	rec = do(t, h, "GET", "/api/companies/1")
+	requireJSON(t, rec)
+	var classified companyDetailJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &classified); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if classified.Vendor == nil || *classified.Vendor != "eightfold" {
+		t.Errorf("classified vendor = %v, want eightfold", classified.Vendor)
 	}
 }
 
