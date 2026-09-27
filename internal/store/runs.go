@@ -160,3 +160,25 @@ func IsDryRun(ctx context.Context, db *sql.DB, runID int64) (bool, error) {
 	}
 	return dry == 1, nil
 }
+
+// CancelRun marks a running run as error with a "cancelled by user" note, and reports whether it
+// changed anything. The `WHERE status = 'running'` guard makes it a no-op on a run that already
+// finished, so a stop that races the job's own FinishRun cannot resurrect or corrupt a terminal row.
+func CancelRun(ctx context.Context, db *sql.DB, runID int64) (bool, error) {
+	const q = `
+UPDATE scrape_runs
+   SET finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+       status      = 'error',
+       error_text  = 'cancelled by user'
+ WHERE id = ? AND status = 'running'`
+
+	res, err := db.ExecContext(ctx, q, runID)
+	if err != nil {
+		return false, fmt.Errorf("cancel run %d: %w", runID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("cancel run %d: rows affected: %w", runID, err)
+	}
+	return n > 0, nil
+}

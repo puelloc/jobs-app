@@ -15,11 +15,11 @@ import (
 
 // NewRouter returns the HTTP handler for the job viewer API: read-only GETs, plus the write paths
 // POST /api/companies/{id}/scrape (one company) and POST /api/jobs/{name} (a pipeline job), both
-// serialized by one gate. Unknown paths answer 404 and a non-GET method on a known path answers
+// serialized by one runner. Unknown paths answer 404 and a non-GET method on a known path answers
 // 405, both in the envelope defined by types.go.
 func NewRouter(db *sql.DB, dataDir string, scrapeCmd []string) http.Handler {
 	mux := http.NewServeMux()
-	gate := &jobGate{}
+	runner := &jobRunner{}
 	mux.HandleFunc("GET /api/jobs", handleListJobs(db))
 	mux.HandleFunc("GET /api/jobs/{id}", handleGetJob(db))
 	mux.HandleFunc("GET /api/companies", handleListCompanies(db))
@@ -29,10 +29,11 @@ func NewRouter(db *sql.DB, dataDir string, scrapeCmd []string) http.Handler {
 	mux.HandleFunc("GET /api/companies/{id}", handleGetCompany(db))
 	mux.HandleFunc("GET /api/runs", handleListRuns(db))
 	mux.HandleFunc("GET /api/runs/{id}", handleGetRun(db))
+	mux.HandleFunc("POST /api/runs/{id}/stop", handleStopRun(db, runner))
 	mux.HandleFunc("GET /api/traces/{id}", handleGetTrace(dataDir))
 	mux.HandleFunc("GET /api/logs/server", handleGetServerLog(dataDir))
-	mux.HandleFunc("POST /api/companies/{id}/scrape", handleScrapeCompany(db, dataDir, scrapeCmd, gate))
-	mux.HandleFunc("POST /api/pipeline/{name}", handleTriggerJob(db, dataDir, gate))
+	mux.HandleFunc("POST /api/companies/{id}/scrape", handleScrapeCompany(db, dataDir, scrapeCmd, runner))
+	mux.HandleFunc("POST /api/pipeline/{name}", handleTriggerJob(db, dataDir, runner))
 	mux.HandleFunc("GET /api/pipeline/{id}/log", handleGetJobLog(dataDir))
 
 	// Deliberately no catch-all pattern: registering "/" would match every

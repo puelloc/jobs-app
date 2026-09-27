@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"syscall"
 
 	"jobsapp/internal/store"
 )
@@ -52,7 +53,7 @@ type JobResponse struct {
 }
 
 // handleTriggerJob serves POST /api/pipeline/{name}.
-func handleTriggerJob(db *sql.DB, dataDir string, gate *jobGate) http.HandlerFunc {
+func handleTriggerJob(db *sql.DB, dataDir string, runner *jobRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		spec, ok := triggerableJobs[name]
@@ -61,7 +62,7 @@ func handleTriggerJob(db *sql.DB, dataDir string, gate *jobGate) http.HandlerFun
 			return
 		}
 
-		if !gate.tryAcquire() {
+		if !runner.tryAcquire() {
 			writeError(w, http.StatusConflict, codeConflict, "a job is already running; try again when it finishes")
 			return
 		}
@@ -71,30 +72,33 @@ func handleTriggerJob(db *sql.DB, dataDir string, gate *jobGate) http.HandlerFun
 			// output into the server log.
 			logsDir := filepath.Join(dataDir, "logs")
 			if err := os.MkdirAll(logsDir, 0o755); err != nil {
-				gate.release()
+				runner.release()
 				writeInternalError(w, fmt.Errorf("create logs dir: %w", err))
 				return
 			}
 			logf, err := os.OpenFile(filepath.Join(logsDir, "server.log"),
 				os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 			if err != nil {
-				gate.release()
+				runner.release()
 				writeInternalError(w, fmt.Errorf("open server log: %w", err))
 				return
 			}
 			cmd := exec.Command(spec.bin, spec.args...)
 			cmd.Stdout = logf
 			cmd.Stderr = logf
+			// Own process group so a stop signals the job plus its descendants.
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			if err := cmd.Start(); err != nil {
 				_ = logf.Close()
-				gate.release()
+				runner.release()
 				writeInternalError(w, fmt.Errorf("launch %s: %w", spec.bin, err))
 				return
 			}
+			runner.register(cmd)
 			go func() {
 				_ = cmd.Wait()
 				_ = logf.Close()
-				gate.release()
+				runner.release()
 			}()
 			writeJSON(w, http.StatusAccepted, JobResponse{RunID: 0})
 			return
@@ -102,27 +106,27 @@ func handleTriggerJob(db *sql.DB, dataDir string, gate *jobGate) http.HandlerFun
 
 		platformID, err := store.PlatformIDByName(r.Context(), db, spec.platform)
 		if err != nil {
-			gate.release()
+			runner.release()
 			writeInternalError(w, fmt.Errorf("%s platform: %w", spec.platform, err))
 			return
 		}
 		runID, _, err := store.StartRun(r.Context(), db, platformID)
 		if err != nil {
-			gate.release()
+			runner.release()
 			writeInternalError(w, fmt.Errorf("start run: %w", err))
 			return
 		}
 
 		logPath := filepath.Join(dataDir, "jobs", fmt.Sprintf("%d.log", runID))
 		if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-			gate.release()
+			runner.release()
 			_ = store.FinishRun(r.Context(), db, runID, "error", 0, 0, 0, strPtr(fmt.Sprintf("log dir: %v", err)))
 			writeInternalError(w, fmt.Errorf("create log dir: %w", err))
 			return
 		}
 		logf, err := os.Create(logPath)
 		if err != nil {
-			gate.release()
+			runner.release()
 			_ = store.FinishRun(r.Context(), db, runID, "error", 0, 0, 0, strPtr(fmt.Sprintf("log file: %v", err)))
 			writeInternalError(w, fmt.Errorf("create log file: %w", err))
 			return
@@ -131,26 +135,32 @@ func handleTriggerJob(db *sql.DB, dataDir string, gate *jobGate) http.HandlerFun
 		cmd := exec.Command(spec.bin, spec.args...)
 		cmd.Stdout = logf
 		cmd.Stderr = logf
+		// Own process group so a stop signals the job plus its descendants.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {
 			_ = logf.Close()
-			gate.release()
+			runner.release()
 			_ = store.FinishRun(r.Context(), db, runID, "error", 0, 0, 0, strPtr(fmt.Sprintf("launch: %v", err)))
 			writeInternalError(w, fmt.Errorf("launch %s: %w", spec.bin, err))
 			return
 		}
+		runner.register(cmd)
 
-		// Reap the process, close the log, and finish the run in the background.
+		// Reap the process, close the log, and finish the run in the background. When the run was
+		// stopped, the stop handler already wrote the cancelled state, so skip FinishRun.
 		go func() {
 			waitErr := cmd.Wait()
 			_ = logf.Close()
-			status := "ok"
-			var errText *string
-			if waitErr != nil {
-				status = "error"
-				errText = strPtr(fmt.Sprintf("%v", waitErr))
+			if !runner.isStopped() {
+				status := "ok"
+				var errText *string
+				if waitErr != nil {
+					status = "error"
+					errText = strPtr(fmt.Sprintf("%v", waitErr))
+				}
+				_ = store.FinishRun(context.Background(), db, runID, status, 0, 0, 0, errText)
 			}
-			_ = store.FinishRun(context.Background(), db, runID, status, 0, 0, 0, errText)
-			gate.release()
+			runner.release()
 		}()
 
 		writeJSON(w, http.StatusAccepted, JobResponse{RunID: runID})

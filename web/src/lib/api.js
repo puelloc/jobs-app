@@ -176,6 +176,15 @@ export async function postJob(name) {
 }
 
 /**
+ * Stop a running job (marks it cancelled and kills its process group).
+ * @param {number|string} id
+ * @returns {Promise<{ run_id: number, cancelled: boolean }>}
+ */
+export async function postStopRun(id) {
+	return postJSON(`/api/runs/${id}/stop`);
+}
+
+/**
  * A pipeline job's stdout log, for monitoring a non-agent job the way an agent
  * run is watched through its trace.
  * @param {number|string} id

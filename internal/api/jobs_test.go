@@ -147,3 +147,38 @@ func TestTriggerJob_RejectsConcurrentJob(t *testing.T) {
 	rec2 := do(t, h, http.MethodPost, "/api/pipeline/batch")
 	requireError(t, rec2, http.StatusConflict, "conflict")
 }
+
+func TestStopRun_CancelsRunningJob(t *testing.T) {
+	writeFakeJob(t, "batch", "sleep 5")
+
+	h, database, _ := newJobsTestServer(t)
+	rec := do(t, h, http.MethodPost, "/api/pipeline/batch")
+	requireStatus(t, rec, http.StatusAccepted)
+
+	var got JobResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	stop := do(t, h, http.MethodPost, "/api/runs/"+strconv.FormatInt(got.RunID, 10)+"/stop")
+	requireStatus(t, stop, http.StatusOK)
+
+	var status string
+	var errText sql.NullString
+	if err := database.QueryRow(`SELECT status, error_text FROM scrape_runs WHERE id = ?`, got.RunID).
+		Scan(&status, &errText); err != nil {
+		t.Fatalf("read run: %v", err)
+	}
+	if status != "error" {
+		t.Errorf("status = %q, want error", status)
+	}
+	if !errText.Valid || errText.String != "cancelled by user" {
+		t.Errorf("error_text = %v, want 'cancelled by user'", errText)
+	}
+}
+
+func TestStopRun_NotRunningIs409(t *testing.T) {
+	h, _, _ := newJobsTestServer(t)
+	rec := do(t, h, http.MethodPost, "/api/runs/999/stop")
+	requireError(t, rec, http.StatusConflict, "conflict")
+}

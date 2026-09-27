@@ -1,7 +1,7 @@
 <script>
 	import { goto, invalidate } from '$app/navigation';
 	import { onMount } from 'svelte';
-	import { postJob } from '$lib/api.js';
+	import { postJob, postStopRun } from '$lib/api.js';
 	import { formatDuration, formatRunStatus, formatUtc } from '$lib/format.js';
 
 	let { data } = $props();
@@ -25,6 +25,19 @@
 	let pending = $state('');
 	let triggerError = $state('');
 	let warning = $state('');
+	let stopping = $state('');
+
+	async function stopRun(id) {
+		stopping = String(id);
+		try {
+			await postStopRun(id);
+			await invalidate('data:runs');
+		} catch (failure) {
+			triggerError = failure?.message ?? 'Could not stop the run';
+		} finally {
+			stopping = '';
+		}
+	}
 
 	async function trigger(name) {
 		pending = name;
@@ -94,6 +107,13 @@
 						<div class="run-main">
 							<span class="platform">{run.platform}</span>
 							<span class="badge badge-running">Running</span>
+							<button
+								class="stop"
+								disabled={stopping !== ''}
+								onclick={() => stopRun(run.id)}
+							>
+								{stopping === String(run.id) ? 'Stopping…' : 'stop'}
+							</button>
 							<a class="view" href={`/runs/${run.id}`}>watch →</a>
 						</div>
 						<div class="meta">started {formatUtc(run.started_at)} · #{run.id}</div>
@@ -240,6 +260,24 @@
 		color: #6b7178;
 		font-size: 0.82rem;
 		white-space: nowrap;
+	}
+
+	.stop {
+		margin-left: 0.25rem;
+		padding: 0.05rem 0.5rem;
+		border: 1px solid #c62828;
+		border-radius: 6px;
+		background: #ffffff;
+		color: #c62828;
+		font-size: 0.75rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.stop:disabled {
+		border-color: #e4e7ec;
+		color: #8a9099;
+		cursor: not-allowed;
 	}
 
 	.trigger-row {
