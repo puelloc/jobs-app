@@ -15,6 +15,7 @@
 	const present = $derived(data.trace?.present ?? false);
 	const log = $derived(data.log?.log ?? '');
 	const logPresent = $derived(data.log?.present ?? false);
+	const serverLog = $derived(data.serverLog ?? '');
 	const isAgentRun = $derived(run.platform === 'career_listings');
 	// These jobs record their own run but tee their output into the server log, not a per-run file.
 	const isSelfTracked = $derived(
@@ -84,7 +85,12 @@
 	<section class="section">
 		<h2>Output</h2>
 		{#if isSelfTracked}
-			<p class="quiet">This job writes its output to the <a href="/logs">server log</a>.</p>
+			<p class="quiet">This job writes to the shared <a href="/logs">server log</a> — latest output:</p>
+			{#if !serverLog}
+				<p class="quiet">No output yet.</p>
+			{:else}
+				<pre class="log">{serverLog}</pre>
+			{/if}
 		{:else if !logPresent || !log}
 			<p class="quiet">No output yet.</p>
 		{:else}
