@@ -97,7 +97,8 @@ loaded as a careers page, 54 provably wrong, and 49 unverifiable — a similar e
 The next honest step is a validation sweep over the newly stored URLs, not another resolution pass.
 A browser-validation sweep (`sp1500 validate`) is being run separately against a copy of the
 database. Its verdicts on the 632 pre-existing URLs remain valid - this run only *adds* rows and
-rewrites none of those - but it holds no verdict for the 202 companies recovered here, so its
+rewrites none of those - but it held no verdict for the 202 companies recovered here when it ran
+(12 of them have since been validated as part of a later sweep; 190 remain), so its
 classification of the residue does not yet include them.
 
 ## Decisions taken on 2026-09-27

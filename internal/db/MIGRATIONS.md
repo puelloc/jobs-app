@@ -63,9 +63,11 @@ Notes:
   fast, and the next start will find the migrations already applied.
 - SQLite DDL is transactional, so a failed `ALTER TABLE`/`CREATE INDEX` leaves no partial schema.
 
-## Adding migration 003
+## Adding migration 014
 
-1. Create `internal/db/migrations/003_short_description.sql`.
+1. Create `internal/db/migrations/014_short_description.sql` — the next free number, never one that is
+   already applied (`013_company_sources.sql` is the highest today; the version is the primary key in
+   `schema_migrations`).
 2. Write the SQL. Conventions used throughout the schema:
    - timestamps: `TEXT`, RFC3339 UTC, `DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
    - booleans: `INTEGER` with `CHECK (col IN (0,1))`
@@ -74,8 +76,8 @@ Notes:
    - enums: `TEXT` with an explicit `CHECK` listing the allowed values
    - `updated_at` is written by application code — do **not** add triggers
 3. Do not add the file to a list anywhere: `//go:embed migrations/*.sql` picks it up.
-4. Rebuild and run the app (or `go test ./internal/db/`). Existing databases get `003`
-   applied on the next `Open`; fresh databases get `001`, `002`, `003` in order.
+4. Rebuild and run the app (or `go test ./internal/db/`). Existing databases get `014`
+   applied on the next `Open`; fresh databases get every file in order.
 
 Check what a given database has applied:
 

@@ -22,7 +22,8 @@ behind. Each company's row records which run produced its verdict in
 | 22 | `... --only-slugs=<68 affected>` | the 67 wrong + `amgen` | 9 confirmed, 58 wrong, 1 unverifiable | 59 |
 | 23 | `... --only-slugs=<9 flipped>` | the 9 that run 22 confirmed | 5 confirmed, 4 wrong | 9 |
 
-**Final, across all 634 stored `career_site_url` values in `jobs.db`:**
+**Final for this sweep, across all 634 stored `career_site_url` values it judged** (the
+current tally in the consolidated database is in "Afterwards" below):
 
 | Verdict | Companies |
 | --- | ---: |
@@ -210,5 +211,6 @@ Current tally in the merged database, after a 10-company run that was started by
   everything. This is why the corrections in this report could be re-judged without re-fetching the
   whole board, and why a future rule change should not cost another 25-minute sweep.
 - `--refresh` re-validates everything; the **default is to skip companies whose verdict is about the
-  URL they store now**. A default run today does no work: `companies=0 skipped=634`.
+  URL they store now**. A default run skips the 644 already validated and picks up only the 190 that are not, so it
+  does real network work — inspect the selection with `--dry-run --limit 1` first.
 - Every number above was read from the database after the runs, not from the run's own summary line.

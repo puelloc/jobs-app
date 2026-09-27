@@ -1,5 +1,20 @@
 # Job viewer — v1 design
 
+> **Status: v1 design record, partly superseded.** The jobs list and jobs detail screens, and the
+> company directory, that this document designs are **not in the app today** — `web/` was replaced by
+> a runs dashboard (see `web/README.md`). The API contract below is a v1 snapshot too: the API now
+> also serves `GET /api/companies`, `/api/companies/{id}`, `/api/companies/churn` and `/api/runs`.
+>
+> What is **still live guidance**, and should be kept when the next screen is built:
+>
+> - the API ↔ UI boundary rules in "API ↔ UI boundaries" — the API owns the data contract, the UI owns
+>   presentation, and the UI must never compensate for an inconsistent API;
+> - "null means not known", rendered as an omission or "Not stated", never as an empty string or a
+>   fabricated default;
+> - errors are `{"error":{"code","message"}}` and the message is for the operator, not for parsing.
+>
+> Treat the screen descriptions below as history rather than as specification.
+
 ## Purpose
 
 A read-only web view of the scraped software-engineering job listings in `jobs.db`: a list of jobs, most recent first, and a page for one job. It is built for one person running it on their own machine or LAN, with no accounts and no server to operate beyond the two processes. It replaces typing `sqlite3`/`psql` queries and eyeballing raw rows to answer "what did the scraper find, and is it still live?".

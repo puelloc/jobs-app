@@ -38,7 +38,7 @@ There should never have been two. The root `jobs.db` was created by `config.Defa
 which is relative to the working directory, so the first scraper that ran from the repo root created it.
 The S&P 1500 work was then given an explicit `DB_PATH=/tmp/sp1500-live/jobs.db`, which is how a second,
 source-named database appeared — and `/tmp` was wiped soon after, taking that file with it.
-`data/sp1500-live/jobs.db` is a frozen pre-merge copy kept as a safety net (§8).
+Frozen pre-merge copies are kept as a safety net under `data/backups/` (§8).
 
 The merge moved the S&P rows into the original file and is recorded in
 `internal/db/oneoff/consolidate_sp1500_into_jobs_db.sql` (a one-off script, deliberately **not** a migration: it moves rows
@@ -81,7 +81,7 @@ SELECT id, slug, name, career_site_url
    AND career_site_url_verdict IS NULL
  ORDER BY slug;
 
--- 3. Explicitly not input: the 62 wrong and the 76 unverifiable. Do not scrape these until they are
+-- 3. Explicitly not input: the 64 wrong and the 77 unverifiable. Do not scrape these until they are
 --    re-judged; #6 explains how.
 SELECT id, slug, career_site_url, career_site_url_verdict, career_site_url_verdict_url
   FROM companies
@@ -138,7 +138,7 @@ Two decisions this workstream has to make that the schema cannot:
 
 ## 3. What the validation pass learned that the scraper will hit
 
-Measured on 634 URLs in `docs/runs/2026-09-27-browser-validation.md`:
+Measured on the 644 URLs validated so far, in `docs/runs/2026-09-27-browser-validation.md`:
 
 - **64 sites (10.1%) answer HTTP 403 to a real browser.** They are not wrong URLs; they refuse
   automated clients. A scraper will meet the same wall. `internal/browseruse` exists for this, but see

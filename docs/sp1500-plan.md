@@ -4,15 +4,21 @@
 
 | Field | Value |
 | --- | --- |
-| Current milestone | **M1, M2a and M3 complete; the browser validation sweep has run** - 496 confirmed / 62 wrong / 76 unverifiable of 634 stored URLs (see §12 and `docs/runs/2026-09-27-browser-validation.md`). The tier-1 re-keying fixes are in and measured: stored careers URLs **632 → 834** (`docs/runs/2026-09-27-residue-after-join-fix.md`). |
-| Next action | **None for the career-site search - it stops here by decision (§12).** When work resumes, the next feature tier is **M2b (HTML-only ATS tenant extraction)**, which has a plausible claim on the 379 companies that have a homepage but no careers signal. |
+| Current milestone | **M1, M2a and M3 complete; the browser validation sweep has run** - 503 confirmed / 64 wrong / 77 unverifiable of 644 validated, with 190 of the 834 stored URLs not yet validated (see §12 and `docs/runs/2026-09-27-browser-validation.md`). The tier-1 re-keying fixes are in and measured: stored careers URLs **632 → 834** (`docs/runs/2026-09-27-residue-after-join-fix.md`). |
+| Next action | **None for the career-site search - it stops here by decision (§12).** The next *workstream* is scraping listings from the resolved URLs (`docs/scraping-plan.md`); the next *resolution* feature tier is **M2b (HTML-only ATS tenant extraction)**, which has a plausible claim on the 379 companies that have a homepage but no careers signal. |
 | Blocking issues | none |
 | Open questions | 3, all non-blocking (see "Unresolved") |
 | Last corrected | validation figure: the first browser sweep's 555 confirmed included **14 pages the census had named wrong**; the validation profile moved them to wrong/unverifiable (§9, failure mode 7) |
 
-This document is the single source of truth for the S&P 1500 workstream. It is self-contained:
-it embeds the measurements, the decisions, and the traps, so a new session can continue without
+This document is the single source of truth for this workstream. It is self-contained: it embeds the
+measurements, the decisions, and the traps, so a new session can continue without
 re-deriving any of them.
+
+**On the name:** the S&P 1500 is one *source* of companies, not the shape of the system. The schema
+treats sources as data (`platforms`, `company_sources`), so nothing here is specific to it beyond the
+parser and the platform ids it seeds; the filename and the `sp1500` command names are historical, from
+the bootstrap that started the workstream. Read "S&P 1500" in this document as "the first company
+source" wherever it appears outside §6.
 
 ---
 
@@ -175,13 +181,15 @@ stored still that?". It therefore never writes `career_site_url`.
 | Resumability: already-validated companies are skipped by default | done |
 | Escalation on the residue (`--escalate` → browser-use agent → re-render → gate) | done |
 
-**Measured outcome** (2026-09-27, all 634 stored URLs in `jobs.db`; run report
-`docs/runs/2026-09-27-browser-validation.md`): **496 confirmed, 62 wrong, 76 unverifiable**. A default
-re-run skips all 634. Four defects were found and fixed during the first pass, the largest being that
-the discovery gate is not a validation gate - see failure mode 7 and the corrections ledger.
+**Measured outcome** (2026-09-27; run report `docs/runs/2026-09-27-browser-validation.md`): the sweep
+validated 634 stored URLs as **496 confirmed, 62 wrong, 76 unverifiable**, and two later bounded runs
+plus a 10-company run brought the current state to **503 / 64 / 77 of 644 validated**, with 190 of the
+834 stored URLs still unvalidated. A default re-run skips the 644 and picks up only the 190. Four
+defects were found and fixed during the first pass, the largest being that the discovery gate is not a
+validation gate - see failure mode 7 and the corrections ledger.
 
 The escalated residue was sampled, not swept: one hard-403 site (`bank-ozk`) cost ~6 minutes and did
-not change its verdict, so the agent stays a bounded tool. The blocked share is 64 of 634 (10.1%),
+not change its verdict, so the agent stays a bounded tool. The blocked share is 64 of 644 (9.9%),
 matching §8.1's measurement on the resolution side.
 
 Design notes worth keeping:
@@ -550,10 +558,12 @@ zero-P856 entities that have articles. Tier 3: **SEC 10-K**, promoted from "last
 
 ### 5.5 Milestone split and browser-use deferral
 
-M1 / M2a / M2b / M3 as in §3. browser-use is deferred: it breaks determinism (same task can return
+M1 / M2a / M2b / M3 as in §3. browser-use was deferred when this was written: it breaks determinism (same task can return
 different URLs run to run, so it cannot be on the primary TDD-covered path — only the seam where its
 result is consumed is testable) and adds a Python + model runtime to a deliberately cgo-free
-single-binary Go project.
+single-binary Go project. **The deferral was later lifted and M3 is implemented** (§3, §12); the
+reasoning above still explains why the tier is isolated behind a subprocess seam and a feature flag
+rather than called in-process.
 
 ### 5.6 ID band scheme
 
@@ -1188,7 +1198,7 @@ one.
    help with either, because there is nothing to search *for*. Revisit only if the 379
    homepage-without-a-careers-page set turns out to be worth attacking.
 4. **M3 (browser-use) is no longer deferred**: it is implemented as `sp1500 validate` and has run
-   over the stored URLs - **496 confirmed / 62 wrong / 76 unverifiable of 634**, recorded in
+   over the stored URLs - **503 confirmed / 64 wrong / 77 unverifiable of 644**, recorded in
    `docs/runs/2026-09-27-browser-validation.md`. The §8.1 call that deferred it was about
    *resolution* (the blocked residue was only ~10%), and that reasoning still stands; validation is a
    different question, where a real browser is the only way to re-measure values a plain client could
@@ -1207,7 +1217,7 @@ one.
    plausible claim on the 379 companies that have a homepage but no careers signal.
 
 The career-site search stops here deliberately, and is good enough to build on: **834 companies carry
-a stored careers URL and 496 of them are browser-confirmed.**
+a stored careers URL and 503 of them are browser-confirmed.**
 
 **Where the next workstream starts:** `docs/scraping-plan.md`. It carries the input query for those
 URLs, what to reuse from the existing scraper, the vendor map mined from the validation pass's retained
