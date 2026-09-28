@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,6 +32,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	onlySlugs := fs.String("only-slugs", "", "comma-separated company slugs to scrape")
 	fromSlug := fs.String("from-slug", "", "start from this slug (alphabetical) and skip earlier companies")
 	stopAfter := fs.Int("stop-after-failures", 0, "stop after this many consecutive company failures (0 = never)")
+	skipOK := fs.Bool("skip-ok", false, "skip companies whose latest scrape run already finished ok")
+	skipTraced := fs.Bool("skip-traced", false, "skip companies whose latest scrape run left a non-empty browser-use trace")
 	delay := fs.Duration("delay", 5*time.Second, "pause between companies")
 	scrapeCmd := fs.String("scrape-cmd", "", "command to run per company (default: config SCRAPE_COMMAND)")
 	if err := fs.Parse(args); err != nil {
@@ -75,9 +78,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	fmt.Fprintf(stdout, "batch: %d companies, sequential\n", len(targets))
-	ok, failed, consecutive := 0, 0, 0
+	fmt.Fprintf(stdout, "batch: %d companies, sequential (skip-ok=%t skip-traced=%t)\n",
+		len(targets), *skipOK, *skipTraced)
+	ok, failed, skipped, consecutive := 0, 0, 0, 0
 	for i, t := range targets {
+		if reason := shouldSkip(t, *skipOK, *skipTraced, cfg.DataDir); reason != "" {
+			skipped++
+			fmt.Fprintf(stdout, "[%d/%d] company=%s skip (%s)\n", i+1, len(targets), t.Slug, reason)
+			continue
+		}
 		if i > 0 && *delay > 0 {
 			time.Sleep(*delay)
 		}
@@ -103,8 +112,34 @@ func run(args []string, stdout, stderr io.Writer) int {
 		consecutive = 0
 	}
 
-	fmt.Fprintf(stdout, "batch done: ok=%d failed=%d total=%d\n", ok, failed, len(targets))
+	fmt.Fprintf(stdout, "batch done: ok=%d failed=%d skipped=%d total=%d\n", ok, failed, skipped, len(targets))
 	return 0
+}
+
+// shouldSkip returns a non-empty reason when the target should be skipped under the given options,
+// or "" when it should be scraped. skipOK skips a company whose latest run already finished ok;
+// skipTraced skips a company whose latest run left a non-empty browser-use trace (the reliable
+// signal that browser-use actually ran, as opposed to a run that said "ok" while the agent died
+// before its first step). The two conditions are independent and OR'd together.
+func shouldSkip(t store.ScrapeTarget, skipOK, skipTraced bool, dataDir string) string {
+	if skipOK && t.LastRunStatus != nil && *t.LastRunStatus == "ok" {
+		return "last run ok"
+	}
+	if skipTraced && t.LastRunID != nil && traceHasEvents(dataDir, *t.LastRunID) {
+		return "browser-use trace present"
+	}
+	return ""
+}
+
+// traceHasEvents reports whether a run's trace file exists and contains at least one event line. An
+// agent that died before its first step leaves either no file or an empty file (TraceWriter opens the
+// file eagerly), so a non-empty file is exactly the "browser-use actually navigated" signal.
+func traceHasEvents(dataDir string, runID int64) bool {
+	raw, err := os.ReadFile(filepath.Join(dataDir, "traces", fmt.Sprintf("%d.jsonl", runID)))
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(raw))) > 0
 }
 
 // splitSlugs splits a comma-separated slug list, dropping blanks.

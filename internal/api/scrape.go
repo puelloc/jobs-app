@@ -66,7 +66,10 @@ func handleScrapeCompany(db *sql.DB, dataDir string, scrapeCmd []string, runner 
 			writeInternalError(w, fmt.Errorf("career_listings platform: %w", err))
 			return
 		}
-		runID, _, err := store.StartRun(r.Context(), db, runPlatformID)
+		// Record which company this run is for (id is the company id parsed from the path): the
+		// full-sweep batch runner needs it to skip companies that already succeeded or already left
+		// a browser-use trace.
+		runID, _, err := store.StartCompanyRun(r.Context(), db, runPlatformID, id)
 		if err != nil {
 			runner.release()
 			writeInternalError(w, fmt.Errorf("start run: %w", err))

@@ -18,7 +18,6 @@
 		{ name: 'resolve', label: 'Resolve career sites' },
 		{ name: 'validate', label: 'Validate career sites' },
 		{ name: 'classify', label: 'Classify vendors' },
-		{ name: 'batch', label: 'Full scrape sweep' },
 		{ name: 'scraper', label: 'Refresh RemoteOK' }
 	];
 
@@ -26,6 +25,13 @@
 	let triggerError = $state('');
 	let warning = $state('');
 	let stopping = $state('');
+
+	// The full scrape sweep's options. Kept local so a re-run can skip companies that already
+	// worked, resume from a point, or stop after a run of failures — all from the UI, no CLI.
+	let sweepSkipOk = $state(false);
+	let sweepSkipTraced = $state(false);
+	let sweepFromSlug = $state('');
+	let sweepStopAfter = $state('');
 
 	async function stopRun(id) {
 		stopping = String(id);
@@ -76,6 +82,27 @@
 		}
 	}
 
+	async function triggerSweep() {
+		pending = 'batch';
+		triggerError = '';
+		try {
+			const res = await postJob('batch', {
+				skip_ok: sweepSkipOk,
+				skip_traced: sweepSkipTraced,
+				from_slug: sweepFromSlug.trim() || undefined,
+				stop_after_failures: Number(sweepStopAfter) || 0
+			});
+			await goto(res.run_id ? `/runs/${res.run_id}` : '/');
+		} catch (failure) {
+			if (failure?.code === 'conflict') {
+				warning = failure.message;
+			} else {
+				triggerError = failure?.message ?? 'Could not start the sweep';
+			}
+			pending = '';
+		}
+	}
+
 	// Poll the load function so in-flight runs and new finishes show up without
 	// a manual refresh. invalidate() re-runs load on the client only.
 	poll(() => invalidate('data:runs'));
@@ -108,6 +135,40 @@
 		{#if triggerError}
 			<p class="error">{triggerError}</p>
 		{/if}
+	</section>
+
+	<section class="section">
+		<h2>Full scrape sweep</h2>
+		<p class="sweep-hint">
+			Scrapes every classified company, one at a time. Check a box to re-run only the companies
+			that still need it — “skip by trace” is the reliable signal that browser-use actually
+			ran, since a run can report success even when the agent died before its first step.
+		</p>
+		<div class="sweep">
+			<label class="check">
+				<input type="checkbox" bind:checked={sweepSkipOk} />
+				Skip companies whose last run succeeded
+			</label>
+			<label class="check">
+				<input type="checkbox" bind:checked={sweepSkipTraced} />
+				Skip companies with a browser-use trace
+			</label>
+			<label class="field">
+				<span>Start after slug</span>
+				<input
+					type="text"
+					bind:value={sweepFromSlug}
+					placeholder="optional, e.g. abbott-laboratories"
+				/>
+			</label>
+			<label class="field">
+				<span>Stop after N failures</span>
+				<input type="number" min="0" step="1" bind:value={sweepStopAfter} placeholder="0 = never" />
+			</label>
+			<button class="trigger" disabled={pending !== ''} onclick={triggerSweep}>
+				{pending === 'batch' ? 'Starting…' : 'Run sweep'}
+			</button>
+		</div>
 	</section>
 
 	<section class="section">
@@ -346,6 +407,62 @@
 		border-color: #e4e7ec;
 		color: #8a9099;
 		cursor: not-allowed;
+	}
+
+	.sweep-hint {
+		margin: 0 0 0.6rem;
+		color: #6b7178;
+		font-size: 0.82rem;
+	}
+
+	.sweep {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-end;
+		gap: 0.6rem 1rem;
+		padding: 0.85rem 0.9rem;
+		background: #ffffff;
+		border: 1px solid #e4e7ec;
+		border-radius: 8px;
+	}
+
+	.sweep .check {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: 0.82rem;
+		align-self: center;
+	}
+
+	.sweep .field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+
+	.sweep .field span {
+		font-size: 0.72rem;
+		font-weight: 650;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		color: #6b7178;
+	}
+
+	.sweep .field input {
+		font: inherit;
+		padding: 0.35rem 0.5rem;
+		border: 1px solid #d4d9e0;
+		border-radius: 6px;
+		background: #ffffff;
+		color: #171b21;
+	}
+
+	.sweep .field input[type='text'] {
+		width: 16rem;
+	}
+
+	.sweep .field input[type='number'] {
+		width: 8rem;
 	}
 
 	.error {

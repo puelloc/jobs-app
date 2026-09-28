@@ -19,14 +19,19 @@
  * the { status, code, message } shape the routes turn into error pages.
  * @param {string} method
  * @param {string} url
- * @param {typeof fetch} [fetcher]  - event.fetch during SSR, else the global fetch
+ * @param {{ body?: unknown, fetcher?: typeof fetch }} [options]
  * @returns {Promise<any>}
  */
-async function request(method, url, fetcher) {
+async function request(method, url, { body, fetcher } = {}) {
 	const f = fetcher ?? globalThis.fetch;
+	const init = { method, headers: { Accept: 'application/json' } };
+	if (body !== undefined) {
+		init.headers['Content-Type'] = 'application/json';
+		init.body = JSON.stringify(body);
+	}
 	let res;
 	try {
-		res = await f(url, { method, headers: { Accept: 'application/json' } });
+		res = await f(url, init);
 	} catch {
 		// The Go server is not running, or the proxy target refused the
 		// connection. The page still has to render something honest.
@@ -63,17 +68,20 @@ async function request(method, url, fetcher) {
  * @returns {Promise<any>}
  */
 async function getJSON(path, { fetch: fetcher } = {}) {
-	return request('GET', path, fetcher);
+	return request('GET', path, { fetcher });
 }
 
 /**
- * POST one JSON endpoint (the single write path). Client-side only: a scrape
- * trigger is a user action, never a server-render side effect.
+ * POST one JSON endpoint (the write path). Client-side only: a scrape trigger is
+ * a user action, never a server-render side effect. An optional `body` object is
+ * sent as the JSON request body; omit it for the bare POSTs the older endpoints
+ * expect.
  * @param {string} path
+ * @param {unknown} [body]
  * @returns {Promise<any>}
  */
-async function postJSON(path) {
-	return request('POST', path);
+async function postJSON(path, body) {
+	return request('POST', path, { body });
 }
 
 /**
@@ -167,12 +175,15 @@ export async function getTrace(id, options = {}) {
 
 /**
  * Trigger one pipeline job (sp1500, classify, batch, scraper). Rejects with 409
- * when another job is already running.
+ * when another job is already running. An optional `body` object is sent as JSON
+ * and lets the batch sweep carry its options (skip already-done companies,
+ * resume point, failure cap).
  * @param {string} name
+ * @param {object} [body]
  * @returns {Promise<{ run_id: number }>}
  */
-export async function postJob(name) {
-	return postJSON(`/api/pipeline/${name}`);
+export async function postJob(name, body) {
+	return postJSON(`/api/pipeline/${name}`, body);
 }
 
 /**

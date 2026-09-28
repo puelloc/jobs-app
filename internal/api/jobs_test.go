@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,6 +136,76 @@ func TestTriggerJob_LogMissingIsPresentFalse(t *testing.T) {
 	}
 	if log.Present {
 		t.Error("a missing log should report present=false")
+	}
+}
+
+func TestBatchArgsFromBody_Full(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/batch",
+		strings.NewReader(`{"skip_ok":true,"skip_traced":true,"from_slug":"abbott-laboratories","stop_after_failures":3,"limit":10}`))
+	args, err := batchArgsFromBody(req)
+	if err != nil {
+		t.Fatalf("batchArgsFromBody: %v", err)
+	}
+	want := []string{
+		"-skip-ok", "-skip-traced", "-from-slug", "abbott-laboratories",
+		"-stop-after-failures", "3", "-limit", "10",
+	}
+	if strings.Join(args, "|") != strings.Join(want, "|") {
+		t.Errorf("args = %v, want %v", args, want)
+	}
+}
+
+func TestBatchArgsFromBody_EmptyBodyIsNoArgs(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/batch", nil)
+	args, err := batchArgsFromBody(req)
+	if err != nil {
+		t.Fatalf("batchArgsFromBody: %v", err)
+	}
+	if len(args) != 0 {
+		t.Errorf("args = %v, want none", args)
+	}
+}
+
+func TestBatchArgsFromBody_Malformed(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/batch", strings.NewReader(`{not json`))
+	if _, err := batchArgsFromBody(req); err == nil {
+		t.Fatal("batchArgsFromBody: want an error for malformed JSON")
+	}
+}
+
+func TestTriggerJob_BatchForwardsOptions(t *testing.T) {
+	// A fake `batch` binary that writes its argv to a file, so the test can assert the flags the
+	// server derived from the request body actually reached the command line.
+	outPath := filepath.Join(t.TempDir(), "args.txt")
+	binDir := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + outPath + "\n"
+	if err := os.WriteFile(filepath.Join(binDir, "batch"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake batch: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	h, _, _ := newJobsTestServer(t)
+	body := `{"skip_ok":true,"from_slug":"abbott-laboratories","stop_after_failures":3}`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/pipeline/batch", strings.NewReader(body)))
+	requireStatus(t, rec, http.StatusAccepted)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if b, err := os.ReadFile(outPath); err == nil {
+			got := string(b)
+			if strings.Contains(got, "-skip-ok\n") &&
+				strings.Contains(got, "-from-slug\nabbott-laboratories\n") &&
+				strings.Contains(got, "-stop-after-failures\n3\n") &&
+				!strings.Contains(got, "-skip-traced") {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			b, _ := os.ReadFile(outPath)
+			t.Fatalf("batch args not captured; got %q", string(b))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

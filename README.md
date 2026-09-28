@@ -83,6 +83,23 @@ at a time, so SQLite sees one writer and the model host sees one browser agent. 
 -vendor <vendor>` runs a single company instead, and `scraper` refreshes the separate RemoteOK job
 source. The `./data` volume carries `jobs.db` and the per-run agent traces across recreations.
 
+The full sweep is driven from the UI ("Full scrape sweep" on the Runs dashboard), not the CLI. It
+takes options the CLI also accepts via `batch -skip-ok -skip-traced -from-slug <slug>
+-stop-after-failures N`:
+
+- **Skip companies whose last run succeeded** (`-skip-ok`) — re-run only companies whose latest
+  listings run did not finish `ok`.
+- **Skip companies with a browser-use trace** (`-skip-traced`) — re-run only companies whose latest
+  run left *no* trace events. A trace is the reliable "browser-use actually ran" signal: a run can
+  report `ok` even when the agent died before its first step, so this is the way to target exactly
+  the silent failures.
+- **Start after slug** (`-from-slug`) — resume a sweep from a point.
+- **Stop after N failures** (`-stop-after-failures`) — halt a sweep once a run of consecutive
+  failures happens, leaving a resume point in the log.
+
+Each listings run records the company it scraped (`scrape_runs.company_id`, migration 016), which is
+what lets the skip decision know "did this company already succeed / already leave a trace".
+
 The UI talks to the API over the compose network (it proxies `/api/*` to `app:8080`); it does not
 need the API host port exposed, which is kept for direct `curl` use.
 

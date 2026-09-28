@@ -75,3 +75,47 @@ func TestListScrapeTargets_Empty(t *testing.T) {
 		t.Errorf("got %d targets, want 0", len(targets))
 	}
 }
+
+func TestListScrapeTargets_SurfacesLatestRun(t *testing.T) {
+	database := newTestDB(t)
+	seedScrapeTargets(t, database)
+	ctx := context.Background()
+
+	// alpha (company 1) has a finished-ok listings run; delta (company 4) has never been scraped.
+	id, _, err := StartCompanyRun(ctx, database, 25, 1)
+	if err != nil {
+		t.Fatalf("StartCompanyRun: %v", err)
+	}
+	if err := FinishRun(ctx, database, id, "ok", 0, 0, 0, nil); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	targets, err := ListScrapeTargets(ctx, database, 0)
+	if err != nil {
+		t.Fatalf("ListScrapeTargets: %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("got %d targets, want 2", len(targets))
+	}
+
+	bySlug := map[string]ScrapeTarget{}
+	for _, t := range targets {
+		bySlug[t.Slug] = t
+	}
+
+	alpha := bySlug["alpha"]
+	if alpha.LastRunID == nil || *alpha.LastRunID != id {
+		t.Errorf("alpha.LastRunID = %v, want %d", alpha.LastRunID, id)
+	}
+	if alpha.LastRunStatus == nil || *alpha.LastRunStatus != "ok" {
+		t.Errorf("alpha.LastRunStatus = %v, want ok", alpha.LastRunStatus)
+	}
+
+	delta := bySlug["delta"]
+	if delta.LastRunID != nil {
+		t.Errorf("delta.LastRunID = %v, want nil (never scraped)", *delta.LastRunID)
+	}
+	if delta.LastRunStatus != nil {
+		t.Errorf("delta.LastRunStatus = %v, want nil (never scraped)", *delta.LastRunStatus)
+	}
+}

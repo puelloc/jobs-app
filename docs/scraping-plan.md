@@ -4,8 +4,11 @@
 > `sp1500` (index companies) → `sp1500 resolve` (careers URLs) → `sp1500 validate` (browser-check,
 > optional) → `classify -commit` (ATS vendor) → `batch` (listings sweep, one company at a time). It
 > is driven from the web UI's "Trigger a job" buttons and monitored via the runs dashboard, the run
-> detail page, and the Logs page. See `README.md` (Deploy) and `web/README.md` for the current shape;
-> this document is the plan it was built from.
+> detail page, and the Logs page. The full sweep is UI-controllable too: "Full scrape sweep" accepts
+> `skip_ok` (skip companies whose last run succeeded), `skip_traced` (skip companies whose last run
+> left a browser-use trace), `from_slug` (resume point) and `stop_after_failures` (halt after a run
+> of failures). See `README.md` (Deploy) and `web/README.md` for the current shape; this document is
+> the plan it was built from.
 
 The careers-site workstream (resolve a company to a careers URL, then validate that URL) is finished.
 This document is the starting point for the next one: **fetch actual job listings from those careers

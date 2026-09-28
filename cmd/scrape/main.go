@@ -123,7 +123,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	runID := *runIDFlag
 	if runID == 0 {
-		runID, _, err = store.StartRun(ctx, database, runPlatformID)
+		// Record which company this run is for: the batch sweep needs it to decide whether a
+		// company already succeeded / already left a trace, so a re-run can skip it.
+		runID, _, err = store.StartCompanyRun(ctx, database, runPlatformID, company.ID)
 		if err != nil {
 			fmt.Fprintf(stderr, "scrape: start run: %v\n", err)
 			return 1

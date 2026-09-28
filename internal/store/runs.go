@@ -62,6 +62,30 @@ RETURNING id, started_at`
 	return id, ts, nil
 }
 
+// StartCompanyRun inserts the scrape_runs row that marks a per-company listings scrape as in flight,
+// recording which company the run is for. It is StartRun plus the company_id link added by migration
+// 016; a batch sweep needs that link to decide, per company, whether a previous run already finished
+// ok or already left a browser-use trace, so it can skip companies that already worked.
+func StartCompanyRun(ctx context.Context, db *sql.DB, platformID, companyID int64) (int64, time.Time, error) {
+	const q = `
+INSERT INTO scrape_runs (platform_id, started_at, status, company_id)
+VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'running', ?)
+RETURNING id, started_at`
+
+	var (
+		id        int64
+		startedAt string
+	)
+	if err := db.QueryRowContext(ctx, q, platformID, companyID).Scan(&id, &startedAt); err != nil {
+		return 0, time.Time{}, fmt.Errorf("insert company scrape_runs: %w", err)
+	}
+	ts, err := time.Parse(time.RFC3339, startedAt)
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("parse started_at %q returned by the database: %w", startedAt, err)
+	}
+	return id, ts, nil
+}
+
 // FinishRun writes the terminal state of a run: finished_at, status, the three
 // counters, and the error text. status is constrained by the schema's CHECK
 // (status IN ('running','ok','error')); it is deliberately not re-validated here.

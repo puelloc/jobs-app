@@ -7,12 +7,16 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"syscall"
 
 	"jobsapp/internal/store"
@@ -62,6 +66,19 @@ func handleTriggerJob(db *sql.DB, dataDir string, runner *jobRunner) http.Handle
 			return
 		}
 
+		// The batch sweep accepts options in its request body (which companies to skip, where to
+		// resume, how many failures to tolerate). Parsed before the gate so a malformed body is a
+		// 400 even while another job is running.
+		jobArgs := append([]string{}, spec.args...)
+		if name == "batch" {
+			extra, err := batchArgsFromBody(r)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
+				return
+			}
+			jobArgs = append(jobArgs, extra...)
+		}
+
 		if !runner.tryAcquire() {
 			writeError(w, http.StatusConflict, codeConflict, "a job is already running; try again when it finishes")
 			return
@@ -83,7 +100,7 @@ func handleTriggerJob(db *sql.DB, dataDir string, runner *jobRunner) http.Handle
 				writeInternalError(w, fmt.Errorf("open server log: %w", err))
 				return
 			}
-			cmd := exec.Command(spec.bin, spec.args...)
+			cmd := exec.Command(spec.bin, jobArgs...)
 			cmd.Stdout = logf
 			cmd.Stderr = logf
 			// Own process group so a stop signals the job plus its descendants.
@@ -132,7 +149,7 @@ func handleTriggerJob(db *sql.DB, dataDir string, runner *jobRunner) http.Handle
 			return
 		}
 
-		cmd := exec.Command(spec.bin, spec.args...)
+		cmd := exec.Command(spec.bin, jobArgs...)
 		cmd.Stdout = logf
 		cmd.Stderr = logf
 		// Own process group so a stop signals the job plus its descendants.
@@ -165,6 +182,50 @@ func handleTriggerJob(db *sql.DB, dataDir string, runner *jobRunner) http.Handle
 
 		writeJSON(w, http.StatusAccepted, JobResponse{RunID: runID})
 	}
+}
+
+// batchOptions is the request body for POST /api/pipeline/batch. Every field is optional: absent
+// means the batch runner's default (no skip, full sweep, no resume point, no failure cap).
+type batchOptions struct {
+	SkipOK            bool   `json:"skip_ok"`
+	SkipTraced        bool   `json:"skip_traced"`
+	FromSlug          string `json:"from_slug"`
+	StopAfterFailures int    `json:"stop_after_failures"`
+	Limit             int    `json:"limit"`
+}
+
+// batchArgsFromBody decodes the batch request body into the flags cmd/batch understands. An empty
+// or absent body (the existing UI's bare POST) decodes to zero options and no flags, preserving the
+// current behavior.
+func batchArgsFromBody(r *http.Request) ([]string, error) {
+	var opts batchOptions
+	if r.Body == nil || r.ContentLength == 0 {
+		return nil, nil
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&opts); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("invalid batch options: %w", err)
+	}
+
+	var args []string
+	if opts.SkipOK {
+		args = append(args, "-skip-ok")
+	}
+	if opts.SkipTraced {
+		args = append(args, "-skip-traced")
+	}
+	if opts.FromSlug != "" {
+		args = append(args, "-from-slug", opts.FromSlug)
+	}
+	if opts.StopAfterFailures > 0 {
+		args = append(args, "-stop-after-failures", strconv.Itoa(opts.StopAfterFailures))
+	}
+	if opts.Limit > 0 {
+		args = append(args, "-limit", strconv.Itoa(opts.Limit))
+	}
+	return args, nil
 }
 
 // jobLogIDRE limits a log id to a single safe filename component.

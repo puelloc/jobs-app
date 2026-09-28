@@ -80,6 +80,30 @@ func TestStartRunInsertsRunningRow(t *testing.T) {
 	}
 }
 
+func TestStartCompanyRunRecordsCompany(t *testing.T) {
+	database := newTestDB(t)
+	ctx := context.Background()
+
+	if _, err := database.ExecContext(ctx,
+		`INSERT INTO companies (id, slug, name) VALUES (1, 'acme', 'Acme')`); err != nil {
+		t.Fatalf("seed company: %v", err)
+	}
+
+	id, _, err := StartCompanyRun(ctx, database, 31, 1)
+	if err != nil {
+		t.Fatalf("StartCompanyRun: %v", err)
+	}
+
+	var companyID sql.NullInt64
+	if err := database.QueryRowContext(ctx,
+		`SELECT company_id FROM scrape_runs WHERE id = ?`, id).Scan(&companyID); err != nil {
+		t.Fatalf("read back company_id: %v", err)
+	}
+	if !companyID.Valid || companyID.Int64 != 1 {
+		t.Errorf("company_id = %v, want 1", companyID)
+	}
+}
+
 // design: Run lifecycle step 3 - the row must be committed before the network is
 // touched, so it is visible to a different connection immediately.
 func TestStartRunIsVisibleToOtherConnections(t *testing.T) {
