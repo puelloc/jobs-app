@@ -169,7 +169,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "scrape: parse agent output: %v\n", err)
 		return 1
 	}
-	if !probe.OK || probe.Answer == nil || probe.Answer.ListingsURL == "" {
+	if !probe.OK {
+		// The agent itself failed (exception or timeout). Keep the reason: log it and mark the run
+		// as error rather than silently folding it into "0 found".
+		errText := probe.Error
+		if errText == "" && probe.Timeout {
+			errText = "agent timed out"
+		}
+		finish("error", 0, 0, 0, errText)
+		fmt.Fprintf(stdout, "run_id=%d company=%s agent_failed=1 error=%q timeout=%t\n",
+			runID, company.Slug, probe.Error, probe.Timeout)
+		return 1
+	}
+	if probe.Answer == nil || probe.Answer.ListingsURL == "" {
 		finish("ok", 0, 0, 0, "")
 		evidence := ""
 		if probe.Answer != nil {
