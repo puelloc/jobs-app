@@ -29,6 +29,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	limit := fs.Int("limit", 0, "cap the number of companies (0 means all)")
 	onlySlugs := fs.String("only-slugs", "", "comma-separated company slugs to scrape")
+	fromSlug := fs.String("from-slug", "", "start from this slug (alphabetical) and skip earlier companies")
+	stopAfter := fs.Int("stop-after-failures", 0, "stop after this many consecutive company failures (0 = never)")
 	delay := fs.Duration("delay", 5*time.Second, "pause between companies")
 	scrapeCmd := fs.String("scrape-cmd", "", "command to run per company (default: config SCRAPE_COMMAND)")
 	if err := fs.Parse(args); err != nil {
@@ -65,13 +67,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if slugs := splitSlugs(*onlySlugs); len(slugs) > 0 {
 		targets = filterTargets(targets, slugs)
 	}
+	if *fromSlug != "" {
+		targets = filterFromSlug(targets, *fromSlug)
+	}
 	if len(targets) == 0 {
 		fmt.Fprintln(stdout, "batch: no eligible companies (need a career URL and a classified vendor)")
 		return 0
 	}
 
 	fmt.Fprintf(stdout, "batch: %d companies, sequential\n", len(targets))
-	ok, failed := 0, 0
+	ok, failed, consecutive := 0, 0, 0
 	for i, t := range targets {
 		if i > 0 && *delay > 0 {
 			time.Sleep(*delay)
@@ -86,9 +91,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(stderr, "batch: company=%s failed: %v\n", t.Slug, err)
 			failed++
+			consecutive++
+			if *stopAfter > 0 && consecutive >= *stopAfter {
+				fmt.Fprintf(stdout, "batch: stopped after %d consecutive failures (last company=%s); resume with -from-slug %s\n",
+					consecutive, t.Slug, t.Slug)
+				break
+			}
 			continue
 		}
 		ok++
+		consecutive = 0
 	}
 
 	fmt.Fprintf(stdout, "batch done: ok=%d failed=%d total=%d\n", ok, failed, len(targets))
@@ -115,6 +127,20 @@ func filterTargets(targets []store.ScrapeTarget, slugs []string) []store.ScrapeT
 	out := make([]store.ScrapeTarget, 0, len(slugs))
 	for _, t := range targets {
 		if want[t.Slug] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// filterFromSlug keeps companies whose slug sorts at or after fromSlug (case-insensitive), so a
+// sweep can resume from where it left off. The list is ordered by name, which tracks the slug for
+// these companies closely enough for resume-by-point.
+func filterFromSlug(targets []store.ScrapeTarget, fromSlug string) []store.ScrapeTarget {
+	from := strings.ToLower(strings.TrimSpace(fromSlug))
+	out := make([]store.ScrapeTarget, 0, len(targets))
+	for _, t := range targets {
+		if strings.ToLower(t.Slug) >= from {
 			out = append(out, t)
 		}
 	}
