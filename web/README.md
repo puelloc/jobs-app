@@ -5,8 +5,9 @@ SvelteKit dashboard over the Go API. Six screens:
 - **Runs** at `/` — the status and history of every `scrape_runs` row: running runs first, then
   finished ones. This is the control center: the **Trigger a job** buttons (bootstrap / resolve /
   validate / classify / RemoteOK) launch the pipeline, the **Full scrape sweep** panel runs the
-  browser-use sweep with skip/resume options, and each running run gets **pause / resume / stop** and
-  a **watch →** link.
+  browser-use sweep with skip options and a **"Resume from `<slug>`"** button (shown whenever a
+  previous sweep stopped and left a resume point), and each running run gets **pause / resume / stop**
+  and a **watch →** link.
 - **Run detail** at `/runs/[id]` — one run's status and counters, its output, and (for
   `career_listings` runs) the live agent trace (the `step`/`done` events the browser-use worker
   writes). For self-tracked jobs (resolve/validate/scraper/bootstrap) the output shown is the shared
@@ -84,6 +85,7 @@ build locally.
 | `POST /api/pipeline/{name}` | **yes** — the trigger buttons (`sp1500`, `resolve`, `validate`, `classify`, `batch`, `scraper`); `batch` also accepts a JSON body with the sweep options (`skip_ok`, `skip_traced`, `from_slug`, `stop_after_failures`, `limit`) |
 | `GET /api/pipeline/{id}/log` | **yes** — a run's per-run output |
 | `GET /api/logs/server` | **yes** — the Logs page, and self-tracked runs' output |
+| `GET /api/sweep/position` | **yes** — the sweep panel's "Resume from `<slug>`" button |
 | `GET /api/traces/{id}` | **yes** — a `career_listings` run's live agent trace |
 | `POST /api/companies/{id}/scrape` | **yes** — a company's Scrape button |
 | `GET /api/companies` | **yes** — the company directory (`/companies`) |

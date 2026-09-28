@@ -21,6 +21,7 @@ import (
 
 	"jobsapp/internal/config"
 	"jobsapp/internal/db"
+	"jobsapp/internal/exitcode"
 	"jobsapp/internal/robots"
 	"jobsapp/internal/store"
 )
@@ -137,6 +138,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	trace := fmt.Sprintf("%s/traces/%d.jsonl", cfg.DataDir, runID)
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
+	// A reachability probe wants a shorter budget than the whole-scrape HTTP timeout: three retries
+	// at 30s each would otherwise hold the run open for over a minute before giving up.
+	probeClient := &http.Client{Timeout: 10 * time.Second}
+
+	// classifyAgentFailure decides the exit code for a failed agent phase by re-checking whether the
+	// model host is reachable. A down host is the one failure the batch runner must stop the whole
+	// sweep on (every remaining company would fail the same way), so it is returned as
+	// exitcode.OllamaUnreachable; anything else is an ordinary per-company failure.
+	classifyAgentFailure := func(errText string) int {
+		if reachErr := ollamaReachable(ctx, probeClient, cfg.OllamaHost); reachErr != nil {
+			finish("error", 0, 0, 0, reachErr.Error())
+			fmt.Fprintf(stderr, "scrape: %v\n", reachErr)
+			return exitcode.OllamaUnreachable
+		}
+		finish("error", 0, 0, 0, errText)
+		return 1
+	}
 
 	// 0. Politeness: honor the careers origin's robots.txt before the agent touches it.
 	careersPolicy, err := robots.Fetch(ctx, httpClient, company.CareerSiteURL, cfg.UserAgent)
@@ -152,7 +170,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	// 1. Agent: find the filtered listings URL, writing the live trace as it goes.
+	// 1. Agent: find the filtered listings URL, writing the live trace as it goes. Pre-flight the
+	// model host first so a down Ollama fails this company fast instead of launching Chromium and
+	// then hanging on the first LLM call.
+	if err := ollamaReachable(ctx, probeClient, cfg.OllamaHost); err != nil {
+		finish("error", 0, 0, 0, err.Error())
+		fmt.Fprintf(stderr, "scrape: %v\n", err)
+		return exitcode.OllamaUnreachable
+	}
+
 	probeOut, err := exec.CommandContext(ctx, python, "worker/remote_roles_probe.py",
 		"--url", company.CareerSiteURL,
 		"--company", company.Name,
@@ -161,9 +187,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		"--trace", trace,
 	).Output()
 	if err != nil {
-		finish("error", 0, 0, 0, fmt.Sprintf("agent: %v", err))
+		// The worker process failed. Re-check the host: if Ollama is down now, that is the cause
+		// and the batch runner should stop; otherwise it is an ordinary agent failure.
 		fmt.Fprintf(stderr, "scrape: agent: %v\n", err)
-		return 1
+		return classifyAgentFailure(fmt.Sprintf("agent: %v", err))
 	}
 	var probe probeOutput
 	if err := json.Unmarshal(probeOut, &probe); err != nil {
@@ -178,10 +205,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if errText == "" && probe.Timeout {
 			errText = "agent timed out"
 		}
-		finish("error", 0, 0, 0, errText)
 		fmt.Fprintf(stdout, "run_id=%d company=%s agent_failed=1 error=%q timeout=%t\n",
 			runID, company.Slug, probe.Error, probe.Timeout)
-		return 1
+		return classifyAgentFailure(errText)
 	}
 	if probe.Answer == nil || probe.Answer.ListingsURL == "" {
 		finish("ok", 0, 0, 0, "")
@@ -321,4 +347,41 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// ollamaReachable probes the model host with a lightweight GET /api/tags (the cheapest "is Ollama
+// up" check) up to three times with a short backoff, and returns nil on the first success. Three
+// retries is the stop-when-down contract: a transient blip recovers, a genuinely down host fails
+// the company instead of the agent hanging on its first LLM call.
+func ollamaReachable(ctx context.Context, client *http.Client, host string) error {
+	url := strings.TrimSuffix(host, "/") + "/api/tags"
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return fmt.Errorf("ollama probe: %w", err)
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return nil
+			}
+			lastErr = fmt.Errorf("ollama responded %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		if attempt < 3 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * time.Second):
+			}
+		}
+	}
+	return fmt.Errorf("ollama unreachable after 3 retries (%s): %w", url, lastErr)
 }

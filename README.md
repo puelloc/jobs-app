@@ -97,6 +97,13 @@ takes options the CLI also accepts via `batch -skip-ok -skip-traced -from-slug <
 - **Stop after N failures** (`-stop-after-failures`) — halt a sweep once a run of consecutive
   failures happens, leaving a resume point in the log.
 
+Each company scrape pre-flights the model host before starting the browser agent: if Ollama cannot
+be reached after **3 retries**, that company fails fast (exit code 6) with the reason recorded, and
+the sweep **stops** rather than churning through every remaining company. Before attempting each
+company the sweep writes its slug as a resume point (`<DATA_DIR>/sweep/resume`), so a stopped sweep
+can be continued with one click — the Runs dashboard's sweep panel shows a **"Resume from `<slug>`"**
+button whenever a resume point exists, and clears it when a sweep runs to completion.
+
 Each listings run records the company it scraped (`scrape_runs.company_id`, migration 016), which is
 what lets the skip decision know "did this company already succeed / already leave a trace".
 

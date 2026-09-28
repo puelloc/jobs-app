@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 
 	"jobsapp/internal/config"
 	"jobsapp/internal/db"
+	"jobsapp/internal/exitcode"
 	"jobsapp/internal/store"
 )
 
@@ -81,6 +83,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "batch: %d companies, sequential (skip-ok=%t skip-traced=%t)\n",
 		len(targets), *skipOK, *skipTraced)
 	ok, failed, skipped, consecutive := 0, 0, 0, 0
+	stoppedEarly := false
 	for i, t := range targets {
 		if reason := shouldSkip(t, *skipOK, *skipTraced, cfg.DataDir); reason != "" {
 			skipped++
@@ -90,6 +93,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if i > 0 && *delay > 0 {
 			time.Sleep(*delay)
 		}
+		// Persist the resume point before attempting: if the sweep is stopped (SIGTERM) or crashes
+		// mid-company, the file already names the company a resume should start from.
+		writeResumePoint(cfg.DataDir, t.Slug)
 		fmt.Fprintf(stdout, "[%d/%d] company=%s vendor=%s\n", i+1, len(targets), t.Slug, t.Vendor)
 
 		argv := append([]string{}, cmdWords[1:]...)
@@ -101,15 +107,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "batch: company=%s failed: %v\n", t.Slug, err)
 			failed++
 			consecutive++
+			if isOllamaUnreachable(err) {
+				// Ollama is down: every remaining company would fail the same way, so stop rather
+				// than churn. The resume point written above lets the UI resume from this company.
+				fmt.Fprintf(stdout, "batch: stopped: model host unreachable (company=%s); resume with -from-slug %s\n",
+					t.Slug, t.Slug)
+				stoppedEarly = true
+				break
+			}
 			if *stopAfter > 0 && consecutive >= *stopAfter {
 				fmt.Fprintf(stdout, "batch: stopped after %d consecutive failures (last company=%s); resume with -from-slug %s\n",
 					consecutive, t.Slug, t.Slug)
+				stoppedEarly = true
 				break
 			}
 			continue
 		}
 		ok++
 		consecutive = 0
+	}
+
+	// A sweep that ran every company to the end has nothing to resume: clear the resume point so the
+	// UI does not offer a stale "Resume" button. A stopped sweep keeps it for one-click resume.
+	if !stoppedEarly {
+		clearResumePoint(cfg.DataDir)
 	}
 
 	fmt.Fprintf(stdout, "batch done: ok=%d failed=%d skipped=%d total=%d\n", ok, failed, skipped, len(targets))
@@ -140,6 +161,34 @@ func traceHasEvents(dataDir string, runID int64) bool {
 		return false
 	}
 	return len(strings.TrimSpace(string(raw))) > 0
+}
+
+// resumeFilePath is where the sweep leaves its resume point: the slug of the company a resume should
+// start from. The API serves it (GET /api/sweep/position) so the UI can offer a one-click resume.
+func resumeFilePath(dataDir string) string {
+	return filepath.Join(dataDir, "sweep", "resume")
+}
+
+// writeResumePoint records the slug currently being attempted. It is written before the attempt, not
+// after, so a stop (SIGTERM) or crash mid-company still leaves a correct resume point behind.
+func writeResumePoint(dataDir, slug string) {
+	p := resumeFilePath(dataDir)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(p, []byte(slug), 0o644)
+}
+
+// clearResumePoint removes the resume point once a sweep has run to completion.
+func clearResumePoint(dataDir string) {
+	_ = os.Remove(resumeFilePath(dataDir))
+}
+
+// isOllamaUnreachable reports whether a child scrape failed with exitcode.OllamaUnreachable, which
+// cmd/scrape returns when the model host could not be reached after its retries.
+func isOllamaUnreachable(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == exitcode.OllamaUnreachable
 }
 
 // splitSlugs splits a comma-separated slug list, dropping blanks.

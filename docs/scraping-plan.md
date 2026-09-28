@@ -7,8 +7,10 @@
 > detail page, and the Logs page. The full sweep is UI-controllable too: "Full scrape sweep" accepts
 > `skip_ok` (skip companies whose last run succeeded), `skip_traced` (skip companies whose last run
 > left a browser-use trace), `from_slug` (resume point) and `stop_after_failures` (halt after a run
-> of failures). See `README.md` (Deploy) and `web/README.md` for the current shape; this document is
-> the plan it was built from.
+> of failures). Each company pre-flights the model host and fails fast (exit code 6) if Ollama cannot
+> be reached after 3 retries, which stops the sweep; the sweep writes its resume point before each
+> company so the UI can resume with one click. See `README.md` (Deploy) and `web/README.md` for the
+> current shape; this document is the plan it was built from.
 
 The careers-site workstream (resolve a company to a careers URL, then validate that URL) is finished.
 This document is the starting point for the next one: **fetch actual job listings from those careers

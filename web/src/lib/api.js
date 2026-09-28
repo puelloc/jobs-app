@@ -233,3 +233,12 @@ export async function getJobLog(id, options = {}) {
 export async function getServerLog(options = {}) {
 	return getJSON(`/api/logs/server`, options);
 }
+
+/**
+ * The full-sweep resume point, if a previous sweep stopped before finishing.
+ * @param {{ fetch?: typeof fetch }} [options]
+ * @returns {Promise<{ present: boolean, slug: string }>}
+ */
+export async function getSweepPosition(options = {}) {
+	return getJSON(`/api/sweep/position`, options);
+}

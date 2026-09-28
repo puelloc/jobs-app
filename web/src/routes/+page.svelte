@@ -103,6 +103,24 @@
 		}
 	}
 
+	// One-click resume: continue from the slug the last sweep left as its resume point.
+	async function resumeSweep() {
+		if (!data.sweep?.present) return;
+		pending = 'batch';
+		triggerError = '';
+		try {
+			const res = await postJob('batch', { from_slug: data.sweep.slug });
+			await goto(res.run_id ? `/runs/${res.run_id}` : '/');
+		} catch (failure) {
+			if (failure?.code === 'conflict') {
+				warning = failure.message;
+			} else {
+				triggerError = failure?.message ?? 'Could not resume the sweep';
+			}
+			pending = '';
+		}
+	}
+
 	// Poll the load function so in-flight runs and new finishes show up without
 	// a manual refresh. invalidate() re-runs load on the client only.
 	poll(() => invalidate('data:runs'));
@@ -168,6 +186,11 @@
 			<button class="trigger" disabled={pending !== ''} onclick={triggerSweep}>
 				{pending === 'batch' ? 'Starting…' : 'Run sweep'}
 			</button>
+			{#if data.sweep?.present}
+				<button class="trigger resume" disabled={pending !== ''} onclick={resumeSweep}>
+					{pending === 'batch' ? 'Starting…' : `Resume from ${data.sweep.slug}`}
+				</button>
+			{/if}
 		</div>
 	</section>
 
@@ -407,6 +430,11 @@
 		border-color: #e4e7ec;
 		color: #8a9099;
 		cursor: not-allowed;
+	}
+
+	.trigger.resume {
+		background: #1a56c4;
+		border-color: #1a56c4;
 	}
 
 	.sweep-hint {
