@@ -301,7 +301,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			IsUS:         j.IsUS,
 			IsRemote:     true,
 		}
-		_, isNew, err := store.UpsertBrowserJob(ctx, database, job, company.ID, jobPlatformID)
+		_, isNew, err := store.UpsertBrowserJob(ctx, database, job, company.ID, jobPlatformID, runID)
 		if err != nil {
 			finish("error", int64(inserted+refreshed+skipped), int64(inserted), int64(refreshed), fmt.Sprintf("store: %v", err))
 			fmt.Fprintf(stderr, "scrape: store %s: %v\n", j.URL, err)

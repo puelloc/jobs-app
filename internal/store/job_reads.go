@@ -49,6 +49,9 @@ type JobRow struct {
 	ListingURL     string
 	ApplicationURL sql.NullString
 	DiscoveryURL   sql.NullString
+	// ScrapeRunID is the run whose agent trace explains why this posting was scraped (migration 017).
+	// NULL for rows from the RemoteOK job-board source and for rows written before the column existed.
+	ScrapeRunID sql.NullInt64
 }
 
 // jobSelect is the one projection both read paths use. It deliberately carries
@@ -80,7 +83,8 @@ SELECT
     j.description,
     j.listing_url,
     j.application_url,
-    j.discovery_url
+    j.discovery_url,
+    j.scrape_run_id
 FROM job_listings j
 LEFT JOIN companies c ON c.id = j.company_id`
 
@@ -112,6 +116,7 @@ func scanJob(s rowScanner) (JobRow, error) {
 		&r.ListingURL,
 		&r.ApplicationURL,
 		&r.DiscoveryURL,
+		&r.ScrapeRunID,
 	)
 	if err != nil {
 		return JobRow{}, err

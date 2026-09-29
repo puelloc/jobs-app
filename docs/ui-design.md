@@ -103,7 +103,7 @@ Read-only. GET only; no POST, PUT, PATCH, or DELETE exists in v1. JSON in, JSON 
 }
 ```
 
-**Detail object** — the same fields as a list item, plus `description` (string or null, verbatim as stored), `listing_url` (string), `application_url` (string or null), and `discovery_url` (string or null). The API does not include `raw_data`, `external_id`, `company_id`, `company_application_platform_id`, `discovery_platform_id`, `tags_json`, `created_at`, or `updated_at`.
+**Detail object** — the same fields as a list item, plus `description` (string or null, verbatim as stored), `listing_url` (string), `application_url` (string or null), `discovery_url` (string or null), and `run_id` (integer or null — the scrape run whose agent trace explains why this posting was scraped; null for the RemoteOK job-board source and rows written before the link existed). The API does not include `raw_data`, `external_id`, `company_id`, `company_application_platform_id`, `discovery_platform_id`, `tags_json`, `created_at`, or `updated_at`.
 
 **Pagination:** offset/limit. It is the simplest scheme that a single-user SQLite-backed read view needs, and nothing in v1 writes rows while a page is being read, so there is no skipped-or-duplicated-row problem for a cursor to solve. `limit` is clamped to 1–100 and `offset` to ≥ 0; values outside that range are a 400 rather than silently corrected.
 
@@ -149,7 +149,8 @@ In order:
 - **Facts** — `employment_type`, location (`location_text`, else `country`, else the `is_remote` flag), a "US" tag only when `is_us` is true, and the compensation line built from the four salary columns exactly as in the list (all null → "Not stated").
 - **Dates, separately labeled** — "Posted by the source" (`posted_at`, null → "Not stated"), "First seen by this app" (`first_seen_at`), "Last seen by this app" (`last_seen_at`). Three distinct labels, never a single generic "date".
 - **Links** — `listing_url` always rendered as "View listing" (`listing_url` is NOT NULL); `application_url` rendered as "Apply on the company site" and hidden when null; `discovery_url` rendered as "Original source page" and hidden when null.
-- **Description** — rendered as escaped plain text in a pre-wrapped block. Descriptions are third-party payload stored as received and may contain HTML, so escaping is the safe default and v1 ships no sanitizer; sanitized HTML is a deliberate later decision, not a gap to fill here. Null → "No description provided."
+- **Description** — rendered as escaped plain text in a pre-wrapped block, capped to a scrollable box so a long posting does not dominate the page. Descriptions are third-party payload stored as received and may contain HTML, so escaping is the safe default and v1 ships no sanitizer; sanitized HTML is a deliberate later decision, not a gap to fill here. Null → "No description provided."
+- **Why this job matched** — shown only when `run_id` is non-null: a link to the scrape run plus that run's agent trace, so a wrong posting can be traced to the reasoning that admitted it.
 - **Back to list** — a plain link to `/`.
 
 Not shown, and deliberately absent from the API: `raw_data` (verbatim payload, large, and may contain the PII the scraper doc keeps out of logs), `external_id` and the numeric foreign keys (`company_id`, `company_application_platform_id`, `discovery_platform_id`), `created_at`/`updated_at` (bookkeeping, not user-facing), `tags_json` (unparsed JSON with no v1 display decision), and `id` outside the URL.

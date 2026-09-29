@@ -19,8 +19,10 @@ SvelteKit dashboard over the Go API. Six screens:
   `url_resolution_attempts` row (accepted and rejected alike), and the **Scrape** button that
   triggers one company's listings scrape (disabled until the company is classified).
 - **Jobs** at `/jobs` and `/jobs/[id]` — the scraped job listings, with a per-job page showing the
-  description (rendered as escaped plain text, never as HTML) and the listing/application/discovery
-  URLs.
+  description (rendered as escaped plain text, never as HTML, capped to a scrollable box) and the
+  listing/application/discovery URLs. When a job is linked to the scrape run that produced it, the
+  page also shows a **"Why this job matched"** section with that run's agent trace, so a posting that
+  is not really a software-engineering role can be traced to the reasoning that admitted it.
 - **Logs** at `/logs` — the tail of the Go API server's own log, where self-tracked jobs stream their
   per-company progress. Shown **newest-first and paginated** (200 lines per page, "Show older" to page
   back).
@@ -105,6 +107,8 @@ src/
     format.js        pure formatting helpers
     refresh.js       the refresh-frequency store (localStorage-backed)
     poll.js          poll(fn) — re-arms an interval when the refresh store changes
+    LogView.svelte   paginated, newest-first, scrollable log view
+    TraceView.svelte one agent trace (steps + done); shared by the run and job pages
   routes/
     +layout.svelte   the shell: top bar, nav (Runs / Companies / Jobs / Logs), Refresh dropdown
     +page.svelte     runs dashboard: trigger buttons + sweep options + running/history runs with pause/resume/stop

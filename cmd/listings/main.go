@@ -141,7 +141,7 @@ func run() int {
 				companyID, platformID, job.ExternalID, job.Title)
 			continue
 		}
-		_, isNew, err := store.UpsertBrowserJob(ctx, database, job, companyID, platformID)
+		_, isNew, err := store.UpsertBrowserJob(ctx, database, job, companyID, platformID, nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "listings: upsert %s: %v\n", j.URL, err)
 			return 1

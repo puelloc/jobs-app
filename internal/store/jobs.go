@@ -58,9 +58,10 @@ INSERT INTO job_listings (
     tags_json,
     posted_at,
     status,
-    raw_data
+    raw_data,
+    scrape_run_id
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?
 )
 ON CONFLICT(discovery_platform_id, external_id)
     WHERE discovery_platform_id IS NOT NULL AND external_id IS NOT NULL
@@ -84,7 +85,8 @@ DO UPDATE SET
     posted_at        = excluded.posted_at,
     last_seen_at     = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
     updated_at       = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-    status           = 'open'
+    status           = 'open',
+    scrape_run_id    = excluded.scrape_run_id
 RETURNING id`
 
 // UpsertJob writes one normalized job and reports whether the row was newly
@@ -140,6 +142,7 @@ func UpsertJob(ctx context.Context, q Querier, j remoteok.NormalizedJob, company
 		j.TagsJSON,
 		postedAt,
 		j.RawData,
+		nil, // scrape_run_id: the RemoteOK board source has no agent trace to associate
 	).Scan(&id)
 	if err != nil {
 		return 0, false, fmt.Errorf("upsert job %s: %w", j.ExternalID, err)

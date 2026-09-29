@@ -38,7 +38,9 @@ type BrowserJob struct {
 // Keyed by (discovery_platform_id, external_id) exactly like UpsertJob, so a re-run refreshes the
 // row instead of duplicating it. Empty optional fields are stored as NULL, matching the schema's
 // "null means not known" convention.
-func UpsertBrowserJob(ctx context.Context, q Querier, j BrowserJob, companyID, discoveryPlatformID int64) (int64, bool, error) {
+// scrapeRunID is any so the two callers can pass a real run id (cmd/scrape) or nil for NULL
+// (cmd/listings, a standalone debug command with no run to associate).
+func UpsertBrowserJob(ctx context.Context, q Querier, j BrowserJob, companyID, discoveryPlatformID int64, scrapeRunID any) (int64, bool, error) {
 	var existingID int64
 	lookupErr := q.QueryRowContext(ctx, jobExistsSQL, discoveryPlatformID, j.ExternalID).Scan(&existingID)
 	inserted := false
@@ -85,6 +87,7 @@ func UpsertBrowserJob(ctx context.Context, q Querier, j BrowserJob, companyID, d
 		nil, // tags_json
 		postedAt,
 		nullable(j.RawData),
+		scrapeRunID,
 	).Scan(&id)
 	if err != nil {
 		return 0, false, fmt.Errorf("upsert browser job %s: %w", j.ExternalID, err)

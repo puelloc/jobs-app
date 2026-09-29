@@ -1,4 +1,5 @@
 <script>
+	import TraceView from '$lib/TraceView.svelte';
 	import {
 		NOT_STATED,
 		formatJobStatus,
@@ -11,6 +12,8 @@
 	let { data } = $props();
 
 	const job = $derived(data.job);
+	const trace = $derived(data.trace ?? { present: false, events: [] });
+	const hasRun = $derived(Boolean(job.run_id));
 </script>
 
 <svelte:head>
@@ -90,6 +93,17 @@
 			{/if}
 		</div>
 	</section>
+
+	{#if hasRun}
+		<section class="section">
+			<h2>Why this job matched</h2>
+			<p class="run-link">
+				Scraped by <a href={`/runs/${job.run_id}`}>run #{job.run_id}</a> — the agent's
+				reasoning for counting this role is below.
+			</p>
+			<TraceView events={trace.events} present={trace.present} />
+		</section>
+	{/if}
 
 	<p><a href="/jobs" class="back">← Back to jobs</a></p>
 </main>
@@ -200,6 +214,15 @@
 		border-radius: 8px;
 		white-space: pre-wrap;
 		word-break: break-word;
+		/* Keep a long posting from dominating the page: cap the height and scroll within the box. */
+		max-height: 24rem;
+		overflow-y: auto;
+	}
+
+	.run-link {
+		margin: 0 0 0.5rem;
+		color: #6b7178;
+		font-size: 0.85rem;
 	}
 
 	.back {

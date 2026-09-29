@@ -27,7 +27,7 @@ func TestUpsertBrowserJob_InsertsThenRefreshes(t *testing.T) {
 		RawData:      `{"@type":"JobPosting","title":"Staff Software Engineer"}`,
 	}
 
-	id, inserted, err := UpsertBrowserJob(ctx, database, job, 1, 31) // 31 = eightfold
+	id, inserted, err := UpsertBrowserJob(ctx, database, job, 1, 31, nil) // 31 = eightfold
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestUpsertBrowserJob_InsertsThenRefreshes(t *testing.T) {
 
 	// A re-run with the same (platform, external_id) refreshes, never duplicates.
 	job.Title = "Staff Software Engineer (L4)"
-	id2, inserted2, err := UpsertBrowserJob(ctx, database, job, 1, 31)
+	id2, inserted2, err := UpsertBrowserJob(ctx, database, job, 1, 31, nil)
 	if err != nil {
 		t.Fatalf("re-upsert: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestUpsertBrowserJob_EmptyOptionalsAreNull(t *testing.T) {
 		Title:      "Engineer",
 	}
 
-	if _, _, err := UpsertBrowserJob(ctx, database, job, 2, 32); err != nil { // 32 = phenom
+	if _, _, err := UpsertBrowserJob(ctx, database, job, 2, 32, nil); err != nil { // 32 = phenom
 		t.Fatalf("upsert with empty optionals: %v", err)
 	}
 
@@ -98,6 +98,32 @@ func TestUpsertBrowserJob_EmptyOptionalsAreNull(t *testing.T) {
 	}
 	if desc != nil || location != nil || raw != nil {
 		t.Errorf("optional columns should be NULL, got desc=%v location=%v raw=%v", desc, location, raw)
+	}
+}
+
+func TestUpsertBrowserJob_RecordsScrapeRun(t *testing.T) {
+	database := newTestDB(t)
+	ctx := context.Background()
+
+	if _, err := database.Exec(`INSERT INTO companies (id, slug, name) VALUES (1, 'twilio', 'Twilio')`); err != nil {
+		t.Fatalf("seed company: %v", err)
+	}
+	if _, err := database.Exec(
+		`INSERT INTO scrape_runs (id, platform_id, started_at, status, company_id) VALUES (7, 25, '2026-01-01T00:00:00.000Z', 'ok', 1)`); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+
+	job := BrowserJob{ExternalID: "run-42", ListingURL: "https://jobs.twilio.com/job/42", Title: "Engineer"}
+	if _, _, err := UpsertBrowserJob(ctx, database, job, 1, 31, int64(7)); err != nil {
+		t.Fatalf("upsert with run id: %v", err)
+	}
+
+	var runID int64
+	if err := database.QueryRow(`SELECT scrape_run_id FROM job_listings WHERE external_id = 'run-42'`).Scan(&runID); err != nil {
+		t.Fatalf("read scrape_run_id: %v", err)
+	}
+	if runID != 7 {
+		t.Errorf("scrape_run_id = %d, want 7", runID)
 	}
 }
 

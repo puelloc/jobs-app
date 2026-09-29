@@ -105,7 +105,10 @@ can be continued with one click — the Runs dashboard's sweep panel shows a **"
 button whenever a resume point exists, and clears it when a sweep runs to completion.
 
 Each listings run records the company it scraped (`scrape_runs.company_id`, migration 016), which is
-what lets the skip decision know "did this company already succeed / already leave a trace".
+what lets the skip decision know "did this company already succeed / already leave a trace". Each
+job posting records the run that scraped it too (`job_listings.scrape_run_id`, migration 017), so the
+job page can show the run's agent trace under "Why this job matched" — the reasoning that admitted a
+posting that turns out not to be a software-engineering role.
 
 The UI talks to the API over the compose network (it proxies `/api/*` to `app:8080`); it does not
 need the API host port exposed, which is kept for direct `curl` use.

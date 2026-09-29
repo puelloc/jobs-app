@@ -47,6 +47,9 @@ type JobDetail struct {
 	ListingURL     string  `json:"listing_url"`
 	ApplicationURL *string `json:"application_url"`
 	DiscoveryURL   *string `json:"discovery_url"`
+	// RunID is the scrape run whose agent trace explains why this posting was scraped (migration
+	// 017). Null for the RemoteOK job-board source and for rows written before the column existed.
+	RunID *int64 `json:"run_id"`
 }
 
 // ListResponse is the envelope around GET /api/jobs. Total is the number of

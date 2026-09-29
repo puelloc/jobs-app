@@ -47,6 +47,7 @@ type jobJSON struct {
 	ListingURL     string  `json:"listing_url"`
 	ApplicationURL *string `json:"application_url"`
 	DiscoveryURL   *string `json:"discovery_url"`
+	RunID          *int64  `json:"run_id"`
 }
 
 type listJSON struct {
@@ -523,6 +524,45 @@ func TestGetJob_NullDescriptionMarshalsNull(t *testing.T) {
 	}
 }
 
+func TestGetJob_ReturnsRunID(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	if _, err := database.Exec(`INSERT INTO companies (id, slug, name) VALUES (1, 'acme', 'Acme')`); err != nil {
+		t.Fatalf("seed company: %v", err)
+	}
+	if _, err := database.Exec(
+		`INSERT INTO scrape_runs (id, platform_id, started_at, status, company_id) VALUES (1, 25, '2024-01-01T00:00:00.000Z', 'ok', 1)`); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	if _, err := database.Exec(
+		`INSERT INTO job_listings (id, company_id, listing_url, title, scrape_run_id) VALUES (1, 1, 'https://x.test/j/1', 'Engineer', 1)`); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	h := NewRouter(database, t.TempDir(), []string{"true"})
+	rec := do(t, h, http.MethodGet, "/api/jobs/1")
+	requireStatus(t, rec, http.StatusOK)
+	if got := decodeJob(t, rec).RunID; got == nil || *got != 1 {
+		t.Errorf("run_id = %v, want 1", got)
+	}
+}
+
+func TestGetJob_NullRunID(t *testing.T) {
+	// The shared fixture's jobs have no scrape_run_id, so run_id must marshal as an explicit null.
+	rec := do(t, newTestServer(t), http.MethodGet, "/api/jobs/1")
+	requireStatus(t, rec, http.StatusOK)
+	if got := decodeJob(t, rec).RunID; got != nil {
+		t.Errorf("run_id = %v, want null", *got)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"run_id":null`) {
+		t.Errorf("body = %s, want an explicit \"run_id\":null", body)
+	}
+}
+
 func TestGetJob_ExactFieldSet(t *testing.T) {
 	rec := do(t, newTestServer(t), http.MethodGet, "/api/jobs/1")
 	requireStatus(t, rec, http.StatusOK)
@@ -535,7 +575,7 @@ func TestGetJob_ExactFieldSet(t *testing.T) {
 		"id", "title", "company_name", "status", "employment_type",
 		"location_text", "country", "is_remote", "salary",
 		"posted_at", "first_seen_at", "last_seen_at",
-		"description", "listing_url", "application_url", "discovery_url",
+		"description", "listing_url", "application_url", "discovery_url", "run_id",
 	})
 
 	for _, forbidden := range []string{

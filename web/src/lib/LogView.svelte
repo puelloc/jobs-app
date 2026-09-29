@@ -43,6 +43,9 @@
 		word-break: break-word;
 		font-size: 0.8rem;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		/* Cap the height so a long log does not stretch the page; the shown page scrolls in place. */
+		max-height: 60vh;
+		overflow-y: auto;
 	}
 
 	.controls {

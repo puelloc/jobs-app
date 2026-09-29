@@ -123,6 +123,7 @@ func handleGetJob(db *sql.DB) http.HandlerFunc {
 			ListingURL:     row.ListingURL,
 			ApplicationURL: nullableString(row.ApplicationURL),
 			DiscoveryURL:   nullableString(row.DiscoveryURL),
+			RunID:          nullableInt64(row.ScrapeRunID),
 		})
 	}
 }
