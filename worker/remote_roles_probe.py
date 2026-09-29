@@ -44,7 +44,7 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
 os.environ.setdefault("BROWSER_USE_VERSION_CHECK", "false")
 
 DEFAULT_OLLAMA_HOST = "https://ai.siggy-lab.org"
-DEFAULT_MODEL = "qwen3.8-27b-64k:latest"
+DEFAULT_MODEL = "qwen38-q3-64k:latest"
 NUM_CTX = 32768
 MAX_ACTIONS_PER_STEP = 3
 

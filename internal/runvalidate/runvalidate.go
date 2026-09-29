@@ -99,6 +99,8 @@ type Options struct {
 	RenderTimeoutSeconds float64
 	// AgentMaxSteps bounds the escalation loop.
 	AgentMaxSteps int
+	// Model is the Ollama model tag the escalation agent asks for. Empty leaves the worker's default.
+	Model string
 	// EvidenceBodyBytes retains this many bytes of an accepted attempt's response for re-judging
 	// under future rules. Zero keeps only rejected attempts' bodies, which is the older behaviour;
 	// a rejected attempt always keeps everything the gate saw.
@@ -394,6 +396,7 @@ func (r Runner) judge(ctx context.Context, c Company, opts Options) outcome {
 		CompanyName: c.Name,
 		Agent: &browseruse.AgentOptions{
 			MaxSteps: opts.AgentMaxSteps,
+			Model:    opts.Model,
 		},
 	})
 	if agentErr != nil || !agentRes.OK {

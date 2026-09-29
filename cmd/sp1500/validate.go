@@ -222,6 +222,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		EvidenceBodyBytes:    flags.evidenceBytes,
 		RenderTimeoutSeconds: flags.pageTimeout.Seconds(),
 		AgentMaxSteps:        flags.agentSteps,
+		Model:                cfg.BrowserUseModel,
 		Progress:             progressWriter(flags.progress, stderr),
 	})
 	if err != nil {

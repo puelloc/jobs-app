@@ -183,6 +183,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		"--url", company.CareerSiteURL,
 		"--company", company.Name,
 		"--host", cfg.OllamaHost,
+		"--model", cfg.BrowserUseModel,
 		"--max-steps", fmt.Sprintf("%d", *maxSteps),
 		"--trace", trace,
 	).Output()

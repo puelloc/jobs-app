@@ -33,7 +33,7 @@ func TestListRuns_ReturnsNewestFirstWithTotal(t *testing.T) {
 	seedRun(t, database, 2, "2026-09-27T01:10:00.000Z", nil, "running", nil)
 	seedRun(t, database, 3, "2026-09-27T01:20:00.000Z", "2026-09-27T01:20:30.000Z", "error", "boom")
 
-	runs, total, err := ListRuns(ctx, database, 100, 0)
+	runs, total, err := ListRuns(ctx, database, 100, 0, "")
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestListRuns_HonorsLimitAndOffset(t *testing.T) {
 	seedRun(t, database, 2, "2026-09-27T01:10:00.000Z", nil, "running", nil)
 	seedRun(t, database, 3, "2026-09-27T01:20:00.000Z", "2026-09-27T01:20:30.000Z", "error", "boom")
 
-	page, total, err := ListRuns(ctx, database, 1, 1)
+	page, total, err := ListRuns(ctx, database, 1, 1, "")
 	if err != nil {
 		t.Fatalf("ListRuns(limit=1, offset=1): %v", err)
 	}
@@ -95,7 +95,7 @@ func TestListRuns_HonorsLimitAndOffset(t *testing.T) {
 
 func TestListRuns_EmptyIsNonNil(t *testing.T) {
 	database := newTestDB(t)
-	runs, total, err := ListRuns(context.Background(), database, 100, 0)
+	runs, total, err := ListRuns(context.Background(), database, 100, 0, "")
 	if err != nil {
 		t.Fatalf("ListRuns on empty db: %v", err)
 	}
@@ -104,6 +104,46 @@ func TestListRuns_EmptyIsNonNil(t *testing.T) {
 	}
 	if runs == nil {
 		t.Error("runs is nil, want a non-nil empty slice")
+	}
+}
+
+func TestListRuns_SearchFiltersByPlatformAndStatus(t *testing.T) {
+	database := newTestDB(t)
+	ctx := context.Background()
+
+	// Two remoteok runs (platform 1) and one career_batch run (platform 27, migration 015).
+	seedRun(t, database, 1, "2026-09-27T01:00:00.000Z", "2026-09-27T01:00:05.000Z", "ok", nil)
+	seedRun(t, database, 3, "2026-09-27T01:20:00.000Z", "2026-09-27T01:20:30.000Z", "error", "boom")
+	if _, err := database.Exec(
+		`INSERT INTO scrape_runs (
+		    id, platform_id, started_at, finished_at, status,
+		    items_found, items_inserted, items_updated, items_wrong, items_unverifiable, dry_run, error_text
+		) VALUES (2, 27, '2026-09-27T02:00:00.000Z', '2026-09-27T02:00:10.000Z', 'ok', 0, 0, 0, 0, 0, 0, NULL)`); err != nil {
+		t.Fatalf("seed batch run: %v", err)
+	}
+
+	byPlatform, total, err := ListRuns(ctx, database, 100, 0, "batch")
+	if err != nil {
+		t.Fatalf("ListRuns(search=batch): %v", err)
+	}
+	if total != 1 || len(byPlatform) != 1 || byPlatform[0].ID != 2 || byPlatform[0].Platform != "career_batch" {
+		t.Errorf("search=batch -> total %d, %+v; want exactly the career_batch run (id 2)", total, byPlatform)
+	}
+
+	byStatus, total2, err := ListRuns(ctx, database, 100, 0, "ERROR")
+	if err != nil {
+		t.Fatalf("ListRuns(search=ERROR): %v", err)
+	}
+	if total2 != 1 || len(byStatus) != 1 || byStatus[0].ID != 3 {
+		t.Errorf("search=ERROR -> total %d, %+v; want exactly the error run (id 3)", total2, byStatus)
+	}
+
+	all, total3, err := ListRuns(ctx, database, 100, 0, "")
+	if err != nil {
+		t.Fatalf("ListRuns(empty search): %v", err)
+	}
+	if total3 != 3 || len(all) != 3 {
+		t.Errorf("empty search -> total %d, %d rows; want all 3", total3, len(all))
 	}
 }
 

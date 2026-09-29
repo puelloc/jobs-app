@@ -3,11 +3,12 @@
 SvelteKit dashboard over the Go API. Six screens:
 
 - **Runs** at `/` — the status and history of every `scrape_runs` row: running runs first, then
-  finished ones. This is the control center: the **Trigger a job** buttons (bootstrap / resolve /
-  validate / classify / RemoteOK) launch the pipeline, the **Full scrape sweep** panel runs the
-  browser-use sweep with skip options and a **"Resume from `<slug>`"** button (shown whenever a
-  previous sweep stopped and left a resume point), and each running run gets **pause / resume / stop**
-  and a **watch →** link.
+  finished ones, with a **search box** (case-insensitive over platform and status, e.g. `batch` or
+  `error`) and a **Load more** button so history beyond the first page is reachable. This is the
+  control center: the **Trigger a job** buttons (bootstrap / resolve / validate / classify / RemoteOK)
+  launch the pipeline, the **Full scrape sweep** panel runs the browser-use sweep with skip options
+  and a **"Resume from `<slug>`"** button (shown whenever a previous sweep stopped and left a resume
+  point), and each running run gets **pause / resume / stop** and a **watch →** link.
 - **Run detail** at `/runs/[id]` — one run's status and counters, its output, and (for
   `career_listings` runs) the live agent trace (the `step`/`done` events the browser-use worker
   writes). For self-tracked jobs (resolve/validate/scraper/bootstrap) the output shown is the shared
@@ -80,7 +81,7 @@ build locally.
 
 | Endpoint | Used by the UI |
 | --- | --- |
-| `GET /api/runs` | **yes** — the runs dashboard (`/`) |
+| `GET /api/runs` | **yes** — the runs dashboard (`/`); accepts `?q=` to filter by platform/status |
 | `GET /api/runs/{id}` | **yes** — a run's detail (`/runs/{id}`) |
 | `POST /api/runs/{id}/stop` | **yes** — the stop button |
 | `POST /api/runs/{id}/pause` / `resume` | **yes** — the pause/resume button |

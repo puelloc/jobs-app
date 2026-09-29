@@ -5,12 +5,15 @@ import { getRuns, getSweepPosition } from '$lib/api.js';
 // contains the runs. The page then re-runs it on an interval via invalidate to
 // pick up live status.
 /** @type {import('./$types').PageLoad} */
-export async function load({ fetch, depends }) {
+export async function load({ url, fetch, depends }) {
 	depends('data:runs');
+
+	// q filters the list by platform/status (the search box on the page).
+	const q = url.searchParams.get('q') ?? '';
 
 	let data;
 	try {
-		data = await getRuns({ limit: 100, offset: 0 }, { fetch });
+		data = await getRuns({ limit: 100, offset: 0, q }, { fetch });
 	} catch (failure) {
 		// The API's own message when it sent an error envelope; a readable
 		// fallback when the failure never reached the API at all.
@@ -30,6 +33,7 @@ export async function load({ fetch, depends }) {
 		total: data.total,
 		limit: data.limit,
 		offset: data.offset,
+		q,
 		sweep
 	};
 }

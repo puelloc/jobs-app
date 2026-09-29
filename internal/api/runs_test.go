@@ -59,17 +59,17 @@ INSERT INTO scrape_runs (
 ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	for _, r := range []struct {
-		id          int64
-		startedAt   string
-		finishedAt  any
-		status      string
-		found       int64
-		inserted    int64
-		updated     int64
-		wrong       int64
+		id           int64
+		startedAt    string
+		finishedAt   any
+		status       string
+		found        int64
+		inserted     int64
+		updated      int64
+		wrong        int64
 		unverifiable int64
-		dryRun      int64
-		errText     any
+		dryRun       int64
+		errText      any
 	}{
 		{1, "2026-09-27T01:00:00.000Z", "2026-09-27T01:00:05.000Z", "ok", 100, 99, 1, 0, 0, 0, nil},
 		{2, "2026-09-27T01:10:00.000Z", nil, "running", 0, 0, 0, 0, 0, 0, nil},
@@ -209,6 +209,35 @@ func TestListRuns_HonorsLimitAndOffset(t *testing.T) {
 	}
 	if len(got.Runs) != 1 || got.Runs[0].ID != 2 {
 		t.Errorf("runs = %v, want exactly run 2 (the middle row)", got.Runs)
+	}
+}
+
+func TestListRuns_SearchQuery(t *testing.T) {
+	h, database := newTestServerAndDB(t)
+
+	insert := `
+INSERT INTO scrape_runs (id, platform_id, started_at, finished_at, status,
+    items_found, items_inserted, items_updated, items_wrong, items_unverifiable, dry_run, error_text)
+VALUES (?, ?, '2026-09-27T01:00:00.000Z', NULL, ?, 0, 0, 0, 0, 0, 0, NULL)`
+	seed := func(id, platformID int64, status string) {
+		if _, err := database.Exec(insert, id, platformID, status); err != nil {
+			t.Fatalf("seed run %d: %v", id, err)
+		}
+	}
+	seed(1, 1, "ok")  // remoteok
+	seed(2, 27, "ok") // career_batch
+
+	rec := do(t, h, http.MethodGet, "/api/runs?q=batch")
+	requireStatus(t, rec, http.StatusOK)
+	got := decodeRuns(t, rec)
+	if got.Total != 1 || len(got.Runs) != 1 || got.Runs[0].ID != 2 || got.Runs[0].Platform != "career_batch" {
+		t.Errorf("?q=batch -> total %d, %+v; want the career_batch run only", got.Total, got.Runs)
+	}
+
+	rec2 := do(t, h, http.MethodGet, "/api/runs?q=ERROR")
+	requireStatus(t, rec2, http.StatusOK)
+	if got2 := decodeRuns(t, rec2); got2.Total != 0 {
+		t.Errorf("?q=ERROR -> total %d, want 0 (no error runs seeded)", got2.Total)
 	}
 }
 

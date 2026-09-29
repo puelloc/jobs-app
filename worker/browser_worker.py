@@ -41,7 +41,7 @@ os.environ.setdefault("BROWSER_USE_VERSION_CHECK", "false")
 DEFAULT_TIMEOUT_SECONDS = 45.0
 DEFAULT_MAX_BODY_BYTES = 1_500_000
 DEFAULT_MAX_STEPS = 8
-DEFAULT_MODEL = "qwen3.8-27b-64k:latest"
+DEFAULT_MODEL = "qwen38-q3-64k:latest"
 
 
 def _respond(payload: dict[str, Any]) -> None:

@@ -1,17 +1,42 @@
 <script>
 	import { goto, invalidate } from '$app/navigation';
 	import { poll } from '$lib/poll.js';
-	import { postJob, postPauseRun, postResumeRun, postStopRun } from '$lib/api.js';
+	import { getRuns, postJob, postPauseRun, postResumeRun, postStopRun } from '$lib/api.js';
 	import { formatDuration, formatRunStatus, formatUtc } from '$lib/format.js';
 
 	let { data } = $props();
 
-	// load() owns this data: it is replaced wholesale whenever invalidate
-	// re-runs it, so it needs no local state and no deep reactivity.
-	const runs = $derived(data.runs ?? []);
+	// load() owns the first page; "load more" appends further pages client-side. The local copy is
+	// re-synced whenever load() runs again (a poll or a search), so new runs land at the top without
+	// losing the user's place while paging.
+	let allRuns = $state(data.runs ?? []);
+	let offset = $state(data.offset + (data.runs?.length ?? 0));
+	let loadingMore = $state(false);
+	let loadError = $state('');
+
+	$effect(() => {
+		allRuns = data.runs ?? [];
+		offset = data.offset + (data.runs?.length ?? 0);
+	});
+
 	const total = $derived(data.total ?? 0);
-	const running = $derived(runs.filter((r) => r.status === 'running'));
-	const history = $derived(runs.filter((r) => r.status !== 'running'));
+	const hasMore = $derived(offset < total);
+	const running = $derived(allRuns.filter((r) => r.status === 'running'));
+	const history = $derived(allRuns.filter((r) => r.status !== 'running'));
+
+	async function loadMore() {
+		loadingMore = true;
+		loadError = '';
+		try {
+			const page = await getRuns({ limit: data.limit, offset, q: data.q });
+			allRuns = [...allRuns, ...(page.runs ?? [])];
+			offset += page.runs?.length ?? 0;
+		} catch (failure) {
+			loadError = failure?.message ?? 'Could not load more runs';
+		} finally {
+			loadingMore = false;
+		}
+	}
 
 	const jobs = [
 		{ name: 'sp1500', label: 'Bootstrap companies' },
@@ -136,6 +161,19 @@
 		<h1>Runs</h1>
 		<p class="sub">Scraper and validation job runs · {total} total · refreshes every 5s</p>
 	</div>
+
+	<form class="search" method="get" action="/">
+		<input
+			type="search"
+			name="q"
+			placeholder="Search platform or status (e.g. batch, error)"
+			value={data.q ?? ''}
+		/>
+		<button type="submit">Search</button>
+		{#if data.q}
+			<a class="clear" href="/">Clear</a>
+		{/if}
+	</form>
 
 	<section class="section">
 		<h2>Trigger a job</h2>
@@ -266,6 +304,17 @@
 					</li>
 				{/each}
 			</ul>
+
+			<div class="loadmore">
+				{#if hasMore}
+					<button onclick={loadMore} disabled={loadingMore}>
+						{loadingMore ? 'Loading…' : 'Load more'}
+					</button>
+				{/if}
+				{#if loadError}
+					<p class="error">{loadError}</p>
+				{/if}
+			</div>
 		{/if}
 	</section>
 </main>
@@ -309,6 +358,58 @@
 		margin: 0;
 		color: #6b7178;
 		font-size: 0.9rem;
+	}
+
+	.search {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 1.25rem;
+	}
+
+	.search input {
+		font: inherit;
+		padding: 0.4rem 0.6rem;
+		border: 1px solid #d4d9e0;
+		border-radius: 6px;
+		background: #ffffff;
+		color: #171b21;
+		width: 22rem;
+		max-width: 100%;
+	}
+
+	.search button {
+		font: inherit;
+		padding: 0.4rem 0.9rem;
+		border: 1px solid #1a56c4;
+		border-radius: 6px;
+		background: #1a56c4;
+		color: #ffffff;
+		cursor: pointer;
+	}
+
+	.search .clear {
+		font-size: 0.85rem;
+	}
+
+	.loadmore {
+		margin-top: 1rem;
+	}
+
+	.loadmore button {
+		font: inherit;
+		padding: 0.4rem 1rem;
+		border: 1px solid #d4d9e0;
+		border-radius: 6px;
+		background: #ffffff;
+		color: #171b21;
+		cursor: pointer;
+	}
+
+	.loadmore button:disabled {
+		opacity: 0.6;
+		cursor: default;
 	}
 
 	.section h2 {

@@ -85,13 +85,16 @@ async function postJSON(path, body) {
 }
 
 /**
- * One page of runs, newest first, plus the envelope's total.
- * @param {{ limit?: number, offset?: number }} [paging]
+ * One page of runs, newest first, plus the envelope's total. `q` is an optional
+ * case-insensitive substring over platform and status (e.g. "batch", "error").
+ * @param {{ limit?: number, offset?: number, q?: string }} [paging]
  * @param {{ origin?: string }} [options]
  * @returns {Promise<{ runs: any[], limit: number, offset: number, total: number }>}
  */
-export async function getRuns({ limit = 100, offset = 0 } = {}, options = {}) {
-	return getJSON(`/api/runs?limit=${limit}&offset=${offset}`, options);
+export async function getRuns({ limit = 100, offset = 0, q = '' } = {}, options = {}) {
+	const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+	if (q) query.set('q', q);
+	return getJSON(`/api/runs?${query.toString()}`, options);
 }
 
 /**

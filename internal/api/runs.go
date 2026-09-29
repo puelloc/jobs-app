@@ -39,7 +39,10 @@ func handleListRuns(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		rows, total, err := store.ListRuns(r.Context(), db, limit, offset)
+		// q is an optional, case-insensitive substring over platform and status ("batch", "error").
+		search := r.URL.Query().Get("q")
+
+		rows, total, err := store.ListRuns(r.Context(), db, limit, offset, search)
 		if err != nil {
 			writeInternalError(w, fmt.Errorf("list runs: %w", err))
 			return

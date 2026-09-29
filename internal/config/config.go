@@ -34,9 +34,9 @@ const (
 	// exercised without a browser.
 	DefaultBrowserUseCommand = ".venv-browser/bin/python worker/browser_worker.py"
 
-	// DefaultBrowserUseModel is the model the escalation tier asks Ollama for. The plan's M3
-	// section selects this tag: it has vision and tool-calling, and 64k of context.
-	DefaultBrowserUseModel = "qwen3.8-27b-64k:latest"
+	// DefaultBrowserUseModel is the model the escalation tier asks Ollama for. The q3 quantization
+	// trades some accuracy for lower VRAM and faster inference, which suits a batch browser agent.
+	DefaultBrowserUseModel = "qwen38-q3-64k:latest"
 )
 
 // Config holds the resolved runtime settings. No I/O happens in this package.

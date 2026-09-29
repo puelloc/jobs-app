@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // RunRow mirrors one scrape_runs row joined to its platform name. Nullable
@@ -80,21 +81,37 @@ func GetRun(ctx context.Context, q Querier, id int64) (RunRow, error) {
 }
 
 // ListRuns returns one page of runs, newest first, plus the total number of
-// rows. The count and the page are two separate reads rather than one
-// transaction, for the same reason ListJobs does it that way: the viewer is
-// read-only, and a torn count at worst makes "load more" flicker.
+// matching rows. search is an optional, case-insensitive substring matched
+// against the platform name and the status, so an operator can find the batch
+// sweeps ("batch") or every failed run ("error") without paging through history.
+// The count and the page are two separate reads rather than one transaction, for
+// the same reason ListJobs does it that way: the viewer is read-only, and a torn
+// count at worst makes "load more" flicker.
 //
 // limit and offset are expected to be validated by the caller; they are bound
 // as parameters, never interpolated.
-func ListRuns(ctx context.Context, q Querier, limit, offset int) ([]RunRow, int64, error) {
+func ListRuns(ctx context.Context, q Querier, limit, offset int, search string) ([]RunRow, int64, error) {
+	where := ""
+	args := []any{}
+	if s := strings.TrimSpace(search); s != "" {
+		// instr + lower is a literal, case-insensitive substring test: unlike LIKE it treats
+		// "_", "%" and "\" in the search text as ordinary characters, so "career_batch" matches
+		// exactly the platform name rather than a wildcard pattern.
+		where = ` WHERE instr(lower(p.name), lower(?)) > 0 OR instr(lower(r.status), lower(?)) > 0`
+		args = append(args, s, s)
+	}
+
 	var total int64
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM scrape_runs`).Scan(&total); err != nil {
+	if err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM scrape_runs r JOIN platforms p ON p.id = r.platform_id`+where,
+		args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("list runs: count: %w", err)
 	}
 
-	rows, err := q.QueryContext(ctx, runSelect+`
+	pageArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := q.QueryContext(ctx, runSelect+where+`
 ORDER BY r.started_at DESC, r.id DESC
-LIMIT ? OFFSET ?`, limit, offset)
+LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list runs: select: %w", err)
 	}

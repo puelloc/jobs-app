@@ -110,6 +110,10 @@ job posting records the run that scraped it too (`job_listings.scrape_run_id`, m
 job page can show the run's agent trace under "Why this job matched" — the reasoning that admitted a
 posting that turns out not to be a software-engineering role.
 
+The browser-use agent uses the `qwen38-q3-64k:latest` Ollama model by default (a q3 quantization for
+lower VRAM and faster inference). Override it per deploy with the `BROWSER_USE_MODEL` environment
+variable on the `app` service.
+
 The UI talks to the API over the compose network (it proxies `/api/*` to `app:8080`); it does not
 need the API host port exposed, which is kept for direct `curl` use.
 
