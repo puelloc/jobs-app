@@ -3,7 +3,9 @@
 FROM node:22 AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
-RUN npm ci
+# Mount npm's cache so a lockfile change re-downloads only what actually changed. The build itself
+# (vite) has no cross-run cache, so this is the only part that benefits.
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY . .
 RUN npm run build
 

@@ -13,9 +13,15 @@ FROM golang:1.27.1-bookworm AS build
 WORKDIR /src
 # go.sum is required: the module depends on modernc.org/sqlite.
 COPY go.mod go.sum ./
-RUN go mod download
+# The module cache and the compiler's build cache are mounted, not baked into a layer, so they
+# survive across builds. Without the build-cache mount every deploy recompiles the whole dependency
+# graph from scratch - modernc.org/sqlite is a very large generated file - which is ~13 minutes on
+# the NAS. With it, a code change recompiles only this repo's packages.
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/server ./cmd/server \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/server ./cmd/server \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/scrape ./cmd/scrape \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/classify ./cmd/classify \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/batch ./cmd/batch \
@@ -45,10 +51,11 @@ RUN python3 -m venv /venv \
 
 # Worker scripts + vendor playbooks. cmd/scrape and cmd/classify resolve these
 # relative to the working directory (/app), so the layout must match the repo.
-# chmod: the build context may carry them 0600 (a dev checkout), but the container
-# runs as a non-root uid and must read them.
-COPY worker/ ./worker/
-RUN chmod -R a+rX /app/worker
+# --chmod: the build context may carry them 0600 (a dev checkout), but the container
+# runs as a non-root uid and must read them. Doing it at copy time avoids a separate
+# recursive chmod layer, which was minutes of pure overhead under load for a handful
+# of files.
+COPY --chmod=0755 worker/ ./worker/
 
 # Go binaries: `server` is the long-running entrypoint, the rest are one-off jobs
 # run with `docker compose run --rm app <sp1500|scraper|classify|scrape|batch|listings>`.

@@ -25,8 +25,10 @@
 /.browseruse/
 __pycache__/
 
-# Node/npm
-web/node_modules/
+# Node/npm. The UI is built by its own image (web/Dockerfile, context ./web) and the app image needs
+# nothing under web/ at all. web/.npm-cache alone is ~270MB of thousands of small files, which made
+# the app's `COPY . .` take ~70s on the NAS and shipped junk into a build layer for no reason.
+/web/
 /.npm-cache/
 /.npm-logs/
 
