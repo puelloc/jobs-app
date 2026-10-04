@@ -634,12 +634,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 			EmploymentType: postings[i].EmploymentType,
 			PostedAt:       postings[i].PostedAt,
 		}
-		_, isNew, err := store.UpsertBrowserJob(ctx, database, job, company.ID, jobPlatformID, runID)
+		listingID, isNew, err := store.UpsertBrowserJob(ctx, database, job, company.ID, jobPlatformID, runID)
 		if err != nil {
 			finish("error", int64(inserted+refreshed+skipped), int64(inserted), int64(refreshed), fmt.Sprintf("store: %v", err))
 			fmt.Fprintf(stderr, "scrape: store %s: %v\n", j.URL, err)
 			return 1
 		}
+		// One line per stored listing, carrying the id both apps key on.
+		//
+		// This is the record of what the pipeline actually produced, and it is the other half of the
+		// cross-app join: apply-app stores jobs_listing_id for every application it makes, so
+		// `{app=~"jobs-app|apply-app"} | json | listing_id = 12345` returns the scrape that found the job
+		// and the application made from it. Without this line the query returns only apply-app's side,
+		// which looks like a working query that is quietly missing half the story.
+		logger.Info("listing stored",
+			slog.String("span", "store"),
+			slog.Int64("listing_id", listingID),
+			slog.Bool("is_new", isNew),
+			slog.String("title", firstChars(j.Title, 160)),
+			slog.Bool("is_remote", job.IsRemote),
+			slog.String("external_id", firstChars(job.ExternalID, 160)),
+			slog.String("url", j.URL),
+		)
 		if isNew {
 			inserted++
 		} else {

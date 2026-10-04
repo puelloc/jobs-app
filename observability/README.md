@@ -130,6 +130,7 @@ The events worth knowing about, because they are what a question gets answered f
 | `scrape` | `skip` | `reason` (`no_remote_roles` / `listings_none` / `robots_disallowed`), plus the agent numbers |
 | `scrape` | `fetch` | `page_links`, `extracted`, `fetch_s`, `crawl_delay_s` |
 | `scrape` | `store` | `found`, `inserted`, `refreshed`, `skipped_non_us`, `remote_evidence` |
+| `scrape` | `listing stored` | **one line per listing**: `listing_id`, `is_new`, `title`, `is_remote`, `external_id`, `url` |
 | `scrape` | `stale` | `closed`, `note` (`none_observed` / `truncated_at_max_jobs`) |
 | `scrape` | `summary` | **the phase breakdown** — `agent_s`, `fetch_s`, `store_s`, `total_s` — plus `quality` |
 | `scrape` | `agent step` | **every step, as it happens**: `step`, `url`, `actions` (names only), `action_count` |
@@ -176,6 +177,31 @@ exactly why they are recorded on the success path.
 
 The phase timings answer the question an optimisation actually starts with — `agent_s` versus
 `fetch_s` versus `store_s` — so "the scrape is slow" becomes a specific claim about which part.
+
+## Joining to apply-app
+
+`jobs_listing_id` is the key both apps use, and it is `job_listings.id` — an immutable surrogate, because
+`external_id` is not a usable natural key: it is *derived*, and the vendor playbooks define
+`external_id_pattern` for **eightfold only**, so for greenhouse, lever, ashby, phenom and every vendor
+without a playbook it is **the entire listing URL**.
+
+The `listing stored` line is what makes the join work from this side:
+
+```logql
+{app=~"jobs-app|apply-app"} | json | listing_id = 12345
+```
+
+Without it, that query returns apply-app's half and looks like it worked — the failure mode worth
+designing against. Two properties the join depends on, both pinned by tests:
+
+- the id is **stable across refreshes** (`TestUpsertBrowserJob_InsertsThenRefreshes`);
+- the id is **stable when a listing closes and returns** — updated in place and reopened, not re-created
+  (`TestUpsertBrowserJob_KeepsTheSameIDWhenAListingClosesAndReturns`).
+
+A caveat to know: `job_listings` de-duplicates on `(discovery_platform_id, external_id)`, and scraped
+rows all share `discovery_platform_id = 25`, so that is effectively `external_id` alone. Two different
+ATSs issuing the same id would collide onto one row. Real ids from the playbooks would make that
+impossible rather than merely unlikely.
 
 ## Request logging is filtered, deliberately
 

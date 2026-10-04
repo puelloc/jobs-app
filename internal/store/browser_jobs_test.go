@@ -351,3 +351,60 @@ func TestCompanyListingsURLCacheRoundTrip(t *testing.T) {
 		t.Errorf("verdict after clear = %v, want nil", *cleared.ListingsURLRemoteConfirmed)
 	}
 }
+
+func TestUpsertBrowserJob_KeepsTheSameIDWhenAListingClosesAndReturns(t *testing.T) {
+	// This is the property the cross-app join rests on. apply-app stores jobs_listing_id and never sees
+	// this table again, so an id that changed when a posting disappeared for a week and came back would
+	// leave an application pointing at a job that is no longer the one applied to - silently, because
+	// the id would still resolve to *a* row. A returning posting must be found by its natural key and
+	// updated in place, never re-created.
+	database := newTestDB(t)
+	ctx := context.Background()
+	if _, err := database.Exec(`INSERT INTO companies (id, slug, name) VALUES (1, 'twilio', 'Twilio')`); err != nil {
+		t.Fatalf("seed company: %v", err)
+	}
+	job := BrowserJob{
+		ExternalID: "1099552857643",
+		ListingURL: "https://jobs.twilio.com/careers/job/1099552857643",
+		Title:      "Staff Software Engineer",
+		IsRemote:   true,
+	}
+
+	id, inserted, err := UpsertBrowserJob(ctx, database, job, 1, 31, nil)
+	if err != nil || !inserted {
+		t.Fatalf("first upsert: id=%d inserted=%v err=%v", id, inserted, err)
+	}
+
+	// A sweep that no longer sees the posting closes it.
+	if _, err := database.Exec(`UPDATE job_listings SET status = 'closed' WHERE id = ?`, id); err != nil {
+		t.Fatalf("close listing: %v", err)
+	}
+
+	// The next sweep sees it again.
+	id2, inserted2, err := UpsertBrowserJob(ctx, database, job, 1, 31, nil)
+	if err != nil {
+		t.Fatalf("re-upsert after close: %v", err)
+	}
+	if inserted2 {
+		t.Error("a returning listing must be updated in place, not re-inserted")
+	}
+	if id2 != id {
+		t.Errorf("returning listing id = %d, want the original %d", id2, id)
+	}
+
+	var status string
+	if err := database.QueryRow(`SELECT status FROM job_listings WHERE id = ?`, id).Scan(&status); err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != "open" {
+		t.Errorf("status = %q, want open: a listing that came back must reopen, or it stays invisible", status)
+	}
+
+	var count int64
+	if err := database.QueryRow(`SELECT COUNT(*) FROM job_listings`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("row count = %d, want 1", count)
+	}
+}
