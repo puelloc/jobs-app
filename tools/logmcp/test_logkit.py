@@ -545,6 +545,25 @@ class TestCompanyHistory(unittest.TestCase):
         self.assertEqual(got["history"][0]["agent_steps"], 14)
 
 
+class TestCompanyHistorySkips(unittest.TestCase):
+    def test_a_company_that_was_only_ever_skipped_is_not_empty_history(self) -> None:
+        # Found by using the tool: a company the batch skipped has no run_id, so grouping by run alone
+        # reported zero history for a company the sweep had considered and passed over on many sweeps.
+        query = '{app=~".+"} | company = "abbott-laboratories"'
+        body = run_body([
+            (600, {"msg": "company skipped", "company": "abbott-laboratories", "sweep_id": 620,
+                   "reason": "browser-use trace present"}),
+            (60, {"msg": "company skipped", "company": "abbott-laboratories", "sweep_id": 632,
+                  "reason": "last run ok"}),
+        ])
+        got = LogKit(FakeLoki(ranges={query: body})).company_history("abbott-laboratories", window="30d")
+        self.assertEqual(got["runs"], 0)
+        self.assertEqual(got["skipped"], 2)
+        self.assertEqual(got["outcomes"], {"skipped_before_running": 2})
+        self.assertEqual([row["reason"] for row in got["history"]],
+                         ["last run ok", "browser-use trace present"], "newest first")
+
+
 class TestListingStory(unittest.TestCase):
     def test_separates_discovery_from_applications(self) -> None:
         query = '{app=~".+"} | listing_id = "12345"'

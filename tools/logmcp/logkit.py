@@ -421,9 +421,30 @@ def _summarise_company(company: str, lines: list[dict], span: timedelta) -> dict
             "sweep_id": _clean(start.get("sweep_id")),
             "at": group[0].get("ts"),
             "vendor": _clean(_field(start, "vendor")),
+            "reason": None,
             **{k: facts[k] for k in ("outcome", "agent_steps", "agent_s", "total_s", "quality",
                                      "block_reason")},
         })
+
+    # A company the batch skipped never ran, so it has no run_id - and dropping those lines made this
+    # report zero history for a company the sweep considered and passed over, which is the opposite of
+    # the question it exists to answer. "Skipped on 14 consecutive sweeps because the last run was ok"
+    # and "never seen" are very different answers.
+    for line in _all_msg(lines, "company skipped"):
+        rows.append({
+            "run_id": None,
+            "sweep_id": _clean(line.get("sweep_id")),
+            "at": line.get("ts"),
+            "vendor": None,
+            "outcome": "skipped_before_running",
+            "reason": _clean(_field(line, "reason")),
+            "agent_steps": None,
+            "agent_s": None,
+            "total_s": None,
+            "quality": None,
+            "block_reason": None,
+        })
+
     rows.sort(key=lambda row: (row["at"] or "", row["run_id"] or 0), reverse=True)
     outcomes: dict[str, int] = {}
     for row in rows:
@@ -433,7 +454,8 @@ def _summarise_company(company: str, lines: list[dict], span: timedelta) -> dict
         "window": str(span),
         "found": True,
         "lines": len(lines),
-        "runs": len(rows),
+        "runs": len([r for r in rows if r["run_id"] is not None]),
+        "skipped": len([r for r in rows if r["run_id"] is None]),
         "outcomes": outcomes,
         "history": rows,
         "errors": len([l for l in lines if str(l.get("level")) in ("error", "fatal")]),
