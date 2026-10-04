@@ -241,7 +241,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logging.IdentityFromEnv().With(&runID, company.Slug),
 	)
 	// The Python children inherit the correlation, so anything they log joins the same trace.
+	// Children log under this service, so a company's whole story - including every agent step the
+	// worker emits to stderr - is one query rather than several.
 	childEnv := append(os.Environ(), logger.Identity().Env()...)
+	childEnv = append(childEnv, logging.EnvService+"=scrape")
 	logger.Info("start",
 		slog.String("vendor", *vendor),
 		slog.String("career_site_url", company.CareerSiteURL),

@@ -132,8 +132,30 @@ The events worth knowing about, because they are what a question gets answered f
 | `scrape` | `store` | `found`, `inserted`, `refreshed`, `skipped_non_us`, `remote_evidence` |
 | `scrape` | `stale` | `closed`, `note` (`none_observed` / `truncated_at_max_jobs`) |
 | `scrape` | `summary` | **the phase breakdown** — `agent_s`, `fetch_s`, `store_s`, `total_s` — plus `quality` |
+| `scrape` | `agent step` | **every step, as it happens**: `step`, `url`, `actions` (names only), `action_count` |
 | `scrape` | `agent failed` | `agent_steps`, `agent_s`, `timeout` — a timeout at step 14 is not a timeout at step 1 |
 | `resolve` | `company unresolved` | `reason`, `attempts`, `sources` — why a careers site was not found |
+
+### Watching an agent work
+
+The worker emits one `agent step` line per step of the browser-use agent, so a scrape's agent phase is
+visible while it is happening rather than only after it returns. Before this, a run produced a single
+`start` line and then several minutes of silence.
+
+The split between the two destinations is deliberate: **the trace file keeps everything** — thinking,
+memory, evaluation, the full action payloads — and **stderr gets the shape** — step number, URL, action
+names. A log store should not receive a language model's reasoning on every step, and the shape is what
+answers the operational questions:
+
+```logql
+{svc="scrape"} | json | company = "abbott-laboratories"     # one company's journey, step by step
+{msg="agent step"} | json | action_count > 3                # steps that did a lot at once
+sum by (company) (count_over_time({msg="agent step"} [1d])) # steps per company: churn, ranked
+{msg="agent finished"} | json | agent_steps > 15            # runs that took an unusual number of steps
+```
+
+`agent finished` closes the span, so the store can report how long an agent phase took and how many
+steps it needed — for successful runs as much as failed ones.
 
 ### Lessons that need successes, not failures
 
