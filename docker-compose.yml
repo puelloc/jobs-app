@@ -107,5 +107,5 @@ networks:
   # http://loki:3100 from a container - instead of a host gateway address, which is per-network and
   # changes when Docker re-assigns subnets after a restart.
   shared:
-    name: ${SHARED_NETWORK:-jobs-net}
+    name: ${SHARED_NETWORK:-siggy-net}
     external: true

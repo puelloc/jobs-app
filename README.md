@@ -64,7 +64,7 @@ That script handles the `PUID`/`PGID` ownership of `./data` (SQLite must be writ
 container user), rebuilds with `docker compose up -d --build --remove-orphans`, and reports any
 restart-loop or API failure. The API is on host port `8094`, the UI on `8095`.
 
-`scripts/deploy.sh` creates the shared `jobs-net` network (if missing) that this stack and the
+`scripts/deploy.sh` creates the shared `siggy-net` network (if missing) that this stack and the
 observability stack both join, so any container can reach the other by service name — `http://loki:3100`
 rather than a host gateway address. Override the name with `SHARED_NETWORK=...` in either stack.
 

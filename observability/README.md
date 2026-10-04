@@ -102,11 +102,11 @@ never knew about each other.
 
 ## Sharing a network with the app stacks
 
-Loki joins an external network (`jobs-net` by default) that the application stacks also join, so any
+Loki joins an external network (`siggy-net` by default) that the application stacks also join, so any
 container in the project can reach it as **`http://loki:3100`** — by name, not by guessing an address.
 
 ```bash
-docker network create jobs-net      # once on the host; jobs-app's deploy.sh does this for you
+docker network create siggy-net      # once on the host; jobs-app's deploy.sh does this for you
 ```
 
 Then redeploy both stacks. This is worth preferring over a host-gateway address like `172.17.0.1` for
@@ -123,7 +123,7 @@ To give Nginx Proxy Manager name-based access too, attach it to the same network
 `http://loki:3100`:
 
 ```bash
-docker network connect jobs-net <npm-container>    # re-run if NPM is ever recreated
+docker network connect siggy-net <npm-container>    # re-run if NPM is ever recreated
 ```
 
 Otherwise point NPM at the NAS's LAN IP, which needs no network change at all.

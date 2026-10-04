@@ -69,7 +69,7 @@ echo "==> shared network"
 # else that opts in) can address each other by service name - `http://loki:3100` rather than the host
 # gateway, which differs per network and moves between reboots. `docker compose up` cannot create an
 # external network, so create it here; the check makes re-running harmless.
-SHARED_NETWORK="${SHARED_NETWORK:-jobs-net}"
+SHARED_NETWORK="${SHARED_NETWORK:-siggy-net}"
 if docker network inspect "$SHARED_NETWORK" >/dev/null 2>&1; then
   echo "    $SHARED_NETWORK exists"
 else

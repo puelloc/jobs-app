@@ -94,9 +94,9 @@ networks:
   # single compose project owns it, so `docker compose down` in one project cannot disconnect another's
   # containers. Create it once:
   #
-  #   docker network create jobs-net
+  #   docker network create siggy-net
   #
   # (jobs-app's scripts/deploy.sh does this for you.)
   shared:
-    name: ${SHARED_NETWORK:-jobs-net}
+    name: ${SHARED_NETWORK:-siggy-net}
     external: true
