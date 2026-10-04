@@ -39,7 +39,14 @@ async function proxy(request, params, url) {
 	const body = await upstream.arrayBuffer();
 	return new Response(body, {
 		status: upstream.status,
-		headers: { 'content-type': upstream.headers.get('content-type') ?? 'application/json' }
+		headers: {
+			'content-type': upstream.headers.get('content-type') ?? 'application/json',
+			// Every route behind this proxy reports live state - a run list, a run's status, the sweep
+			// resume point - and a cached copy of any of them is simply wrong. Without this the browser
+			// is free to reuse them heuristically, which shows a stale dashboard and, worse, hides the
+			// fact that a sweep finished or a resume point moved.
+			'cache-control': 'no-store'
+		}
 	});
 }
 
