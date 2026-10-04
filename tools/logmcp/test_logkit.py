@@ -340,6 +340,32 @@ class TestStatus(unittest.TestCase):
             LogKit(Broken()).status()
 
 
+class TestCodeFreshness(unittest.TestCase):
+    def test_status_reports_whether_the_process_is_older_than_its_source(self) -> None:
+        # Restarting the harness is the only way to load an edit, and a stale process is otherwise
+        # indistinguishable from a current one: the tools answer either way.
+        fake = FakeLoki(labels=["app"], values={"app": ["jobs-app"]})
+        kit = LogKit(fake)
+        got = kit.status("1h")
+        self.assertIn("mcp", got)
+        self.assertIn("stale", got["mcp"])
+        self.assertIn("loaded_at", got["mcp"])
+        self.assertFalse(got["mcp"]["stale"], "a process just started is not stale")
+
+    def test_a_source_newer_than_the_import_is_flagged_stale(self) -> None:
+        fake = FakeLoki()
+        kit = LogKit(fake)
+        # Pretend this module was imported a minute before the file was written.
+        original = logkit._LOADED_AT
+        try:
+            logkit._LOADED_AT = original - 60
+            got = kit._code_freshness()
+            self.assertTrue(got["stale"])
+            self.assertIn("restart", got["note"])
+        finally:
+            logkit._LOADED_AT = original
+
+
 class TestSearchLogs(unittest.TestCase):
     def test_passes_the_query_through_and_parses_the_result(self) -> None:
         query = '{app="jobs-app"} | json | company="cisco"'

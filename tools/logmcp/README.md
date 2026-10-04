@@ -200,3 +200,19 @@ obvious here.
 # No: parses every line in the window to find one run, and `msg` is not a label at all.
 '{app=~".+"} | json | run_id="630"'
 ```
+
+## Is this server running the current code?
+
+The MCP server is spawned by the harness and imports its modules **once**. Editing this package therefore
+does nothing until that process is restarted, and nothing about the answers reveals it: the tools still
+work, they just work with old code, and the only symptom is a field that should exist and does not.
+
+`status` now reports it:
+
+```json
+"mcp": {"loaded_at": "...", "source": ".../logkit.py", "stale": false}
+```
+
+`stale: true` means the source file changed after this process loaded it - restart the harness, or the
+tools will keep answering with the old behaviour. This exists because it cost two round trips to work
+out by hand: the process had started **63 seconds before** the fix was written.

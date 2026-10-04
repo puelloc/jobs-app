@@ -17,11 +17,18 @@ import os
 import re
 import urllib.error
 import urllib.parse
+import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 DEFAULT_LOKI = "http://127.0.0.1:3100"
+
+# Recorded at import, so `status` can tell whether this process is older than the file it was loaded
+# from. A stale MCP server is otherwise invisible: its tools still answer, they just answer with old
+# code, and the only symptom is a field that should be present and is not. That cost two round trips
+# before this existed - the server had started sixty seconds before the fix was written.
+_LOADED_AT = time.time()
 
 # Log lines that mark a container as unhealthy. Deliberately a small, boring list: a pattern that
 # matches everything reports nothing.
@@ -617,8 +624,36 @@ class LogKit:
             "labels": labels,
             "label_values": values,
             "counts_in_window": counts,
+            "mcp": self._code_freshness(),
             "note": note,
         }
+
+    def _code_freshness(self) -> dict:
+        """Whether this process is running the code that is on disk.
+
+        The MCP server is spawned by the harness and loads its modules once, so an edit to this package
+        does nothing until that process is restarted. Nothing about the answers shows it: the tools
+        still work, they just work with old code, and the only symptom is a field that should exist and
+        does not. Comparing the source's mtime with the moment this module was imported makes it
+        visible instead of inferred.
+        """
+        source = os.path.abspath(__file__)
+        try:
+            mtime = os.path.getmtime(source)
+        except OSError:
+            return {"stale": None, "note": "could not stat this module"}
+        stale = mtime > _LOADED_AT + 1  # a second of slack for filesystem timestamp granularity
+        fresh = {
+            "loaded_at": _iso(int(_LOADED_AT * 1e9)),
+            "source": source,
+            "stale": stale,
+        }
+        if stale:
+            fresh["note"] = (
+                "this process loaded its code before the file changed - restart the harness to pick "
+                "the change up, or the tools will keep answering with the old behaviour"
+            )
+        return fresh
 
     def search_logs(
         self,
