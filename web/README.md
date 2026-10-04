@@ -10,7 +10,8 @@ SvelteKit dashboard over the Go API. Six screens:
   than remembered by the client, the next one to run marked, and a plain statement of whether the
   sweep's listings-URL cache is warm — which is what decides whether a sweep is slow. The sweep itself
   sits below the steps as the recurring action, with its options (skip companies already done, start
-  after a slug, stop after N failures) behind a disclosure and a **"Resume from `<slug>`"** button
+  after a slug, **cap how many companies to visit**, **run only named slugs**, stop after N failures)
+  behind a disclosure and a **"Resume from `<slug>`"** button
   whenever a previous sweep left a resume point. Each running run gets **pause / resume / stop** and a
   **watch →** link.
 - **Run detail** at `/runs/[id]` — one run's status and counters, its output, and (for

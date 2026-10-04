@@ -114,6 +114,11 @@
 	let sweepSkipTraced = $state(false);
 	let sweepFromSlug = $state('');
 	let sweepStopAfter = $state('');
+	// A trial sweep: how many companies to visit, and optionally exactly which. Without these the only
+	// options were "all 436" or a CLI command, which made "run a few and read the logs" impossible from
+	// the UI.
+	let sweepLimit = $state('');
+	let sweepOnlySlugs = $state('');
 
 	async function stopRun(id) {
 		stopping = String(id);
@@ -172,7 +177,12 @@
 				skip_ok: sweepSkipOk,
 				skip_traced: sweepSkipTraced,
 				from_slug: sweepFromSlug.trim() || undefined,
-				stop_after_failures: Number(sweepStopAfter) || 0
+				stop_after_failures: Number(sweepStopAfter) || 0,
+				limit: Number(sweepLimit) || 0,
+				only_slugs: sweepOnlySlugs
+					.split(',')
+					.map((slug) => slug.trim())
+					.filter(Boolean)
 			});
 			await goto(res.run_id ? `/runs/${res.run_id}` : '/');
 		} catch (failure) {
@@ -301,6 +311,24 @@
 							type="text"
 							bind:value={sweepFromSlug}
 							placeholder="optional, e.g. abbott-laboratories"
+						/>
+					</label>
+					<label class="field">
+						<span>Companies to run</span>
+						<input
+							type="number"
+							min="0"
+							step="1"
+							bind:value={sweepLimit}
+							placeholder="0 = all"
+						/>
+					</label>
+					<label class="field">
+						<span>Only these slugs</span>
+						<input
+							type="text"
+							bind:value={sweepOnlySlugs}
+							placeholder="optional, comma-separated"
 						/>
 					</label>
 					<label class="field">

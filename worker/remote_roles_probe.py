@@ -34,6 +34,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from agent_trace import TraceWriter
+from block_detect import classify as classify_block
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -123,8 +124,10 @@ Steps:
    contains software/engineer/developer AND the location is remote).
 
 Fallbacks:
-- If the page is blocked, requires login, or never loads, stop and report has_remote_software_roles
-  = false with evidence explaining what happened.
+- If the page is blocked, shows a CAPTCHA or a "checking your browser" interstitial, requires login, or
+  never loads, stop and report has_remote_software_roles = false AND blocked = true with the matching
+  block_reason. A blocked board is NOT the same finding as a board with no openings: reporting it as the
+  latter would cache a wrong answer for days.
 - If you cannot find a search box, read the visible job list and judge from the titles you see.
 - If a submit button cannot be clicked, use send_keys with "Enter".
 
@@ -133,6 +136,10 @@ Answer using the required fields:
 - has_remote_software_roles: true if at least one remote software-engineering role is open, else false
 - remote_software_role_count: the number of such roles you counted (0 if none)
 - evidence: one or two sentences naming what you saw (example titles and whether remote)
+- blocked: true if you were blocked, challenged, throttled or asked to log in; false if you simply read
+  the board and found nothing
+- block_reason: one of captcha, challenge, blocked, login_required, rate_limited, forbidden, unavailable,
+  or "" when blocked is false
 
 Rules:
 - Stay on {company}'s own site or its applicant-tracking board (greenhouse, lever, workday,
@@ -151,6 +158,10 @@ async def run_one(url: str, company: str, host: str, model: str, max_steps: int,
         has_remote_software_roles: bool
         remote_software_role_count: int
         evidence: str
+        # Defaulted, so a model that omits them still produces a parseable answer; the cross-check below
+        # recovers the case where it saw a challenge but did not set the flag.
+        blocked: bool = False
+        block_reason: str = ""
 
     llm = ChatOllama(
         model=model,
@@ -223,11 +234,25 @@ async def run_one(url: str, company: str, host: str, model: str, max_steps: int,
         else:
             judgement = str(judgement)
 
+    # Cross-check the model's report against the words in its own evidence: a model that walked into a
+    # CAPTCHA does not reliably set the field, and "blocked" mis-reported as "no openings" is the one
+    # error here that gets cached as a fact.
+    blocked = bool((answer or {}).get("blocked")) if isinstance(answer, dict) else False
+    block_reason = str((answer or {}).get("block_reason") or "") if isinstance(answer, dict) else ""
+    if not blocked and isinstance(answer, dict):
+        detected = classify_block(text=str(answer.get("evidence") or ""))
+        if detected.blocked:
+            blocked, block_reason = True, detected.reason
+    if not blocked:
+        block_reason = ""
+
     return {
         "ok": True,
         "url": url,
         "company": company,
         "answer": answer,
+        "blocked": blocked,
+        "block_reason": block_reason,
         "is_successful": bool(history.is_successful()),
         "judged": judged,
         "judgement": judgement,

@@ -14,12 +14,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"os"
 	"strings"
 	"time"
 
 	"jobsapp/internal/config"
 	"jobsapp/internal/db"
 	"jobsapp/internal/httpfetch"
+	"jobsapp/internal/logging"
 	"jobsapp/internal/runresolve"
 )
 
@@ -162,6 +165,18 @@ func runResolve(args []string, stdout, stderr io.Writer) int {
 	// rude, so the wrapping happens here where it cannot be forgotten.
 	limiter := httpfetch.NewLimiter(fetcher, httpfetch.WithConcurrency(flags.concurrency))
 
+	// Structured logging for the resolve stage. It runs before any scraping and is where "we could not
+	// find this company's careers site" happens, which until now left no trace beyond a count.
+	logger := logging.New(
+		logging.Config{
+			App:     logging.App(),
+			Service: logging.Service("resolve"),
+			Level:   os.Getenv(logging.EnvLevel),
+			Writer:  stderr,
+		},
+		logging.IdentityFromEnv(),
+	)
+
 	ctx := context.Background()
 	companies, err := runresolve.LoadCompanies(ctx, database, flags.slugs())
 	if err != nil {
@@ -196,13 +211,28 @@ func runResolve(args []string, stdout, stderr io.Writer) int {
 		Concurrency:      flags.concurrency,
 		DataDir:          cfg.DataDir,
 		ResolveHomepages: resolveHomepages,
-		Progress:         resolveProgressWriter(flags.progress, stderr),
+		Progress:         resolveProgressWriter(flags.progress, stderr, logger),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "run=%d status=error step=run err=%q exit=%d\n",
 			summary.RunID, singleLine(err.Error()), exitFailure)
+		logger.Error("resolve run failed", slog.Int64("run_id", summary.RunID), slog.String("error", err.Error()))
 		return exitFailure
 	}
+
+	// The run summary as structured data: this is the line that answers "how many careers sites could
+	// not be found, and why" without reading the per-company stream.
+	logger.Info("resolve finished",
+		slog.Int64("run_id", summary.RunID),
+		slog.Int("companies", summary.Found),
+		slog.Int("resolved", summary.Resolved),
+		slog.Int("unresolved", summary.Unresolved),
+		slog.Int("failed", summary.Failed),
+		slog.Int("inserted", summary.Inserted),
+		slog.Int("updated", summary.Updated),
+		slog.Int64("duration_ms", summary.Duration.Milliseconds()),
+		slog.String("first_error", summary.FirstError),
+	)
 
 	code := exitCodeFor(summary)
 
@@ -262,13 +292,18 @@ func formatSummaryLine(summary runresolve.Summary, dryRun bool) string {
 // resolveProgressWriter returns the per-company reporter, or nil when progress is off. One line per
 // company to stderr, so the stdout success line stays exactly one line; a sweep of 1,500 companies
 // runs for a long time and silence for an hour is indistinguishable from a hang.
-func resolveProgressWriter(enabled bool, w io.Writer) func(runresolve.Progress) {
+func resolveProgressWriter(enabled bool, w io.Writer, logger *logging.Logger) func(runresolve.Progress) {
 	if !enabled {
 		return nil
 	}
 	return func(p runresolve.Progress) {
+		company := logger.With(logger.Identity().With(nil, p.Slug))
 		if p.Err != nil {
 			fmt.Fprintf(w, "company=%s status=error err=%q\n", p.Slug, singleLine(p.Err.Error()))
+			company.Error("company unresolved",
+				slog.String("reason", "error"),
+				slog.String("error", p.Err.Error()),
+			)
 			return
 		}
 		status := "unresolved"
@@ -276,5 +311,16 @@ func resolveProgressWriter(enabled bool, w io.Writer) func(runresolve.Progress) 
 			status = "resolved"
 		}
 		fmt.Fprintf(w, "company=%s status=%s\n", p.Slug, status)
+		if p.Resolved {
+			company.Info("company resolved", slog.Int("attempts", p.Attempts))
+			return
+		}
+		// An unresolved company is the case worth logging in detail: the reason and the attempt count
+		// are what separate "nothing was ever proposed" from "everything proposed was rejected".
+		company.Warn("company unresolved",
+			slog.String("reason", p.Reason),
+			slog.Int("attempts", p.Attempts),
+			slog.Any("sources", p.Sources),
+		)
 	}
 }

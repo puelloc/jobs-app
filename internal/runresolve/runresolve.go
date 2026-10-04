@@ -72,6 +72,15 @@ type Progress struct {
 	Slug     string
 	Resolved bool
 	Err      error
+	// Reason explains an unresolved company: the last non-accepted attempt's reason, or
+	// "no_candidates" when nothing was ever proposed. Without it the only signal is "unresolved",
+	// which reads the same whether a company has no findable careers site or every candidate it
+	// proposed failed validation - two problems with different fixes.
+	Reason string
+	// Attempts and Sources say how hard the resolver tried and where the candidates came from, which
+	// is what turns "unresolved" into something actionable.
+	Attempts int
+	Sources  []string
 }
 
 // Summary is what a completed run did. The counters match scrape_runs.
@@ -159,6 +168,8 @@ func (r Runner) Run(ctx context.Context, companies []Company, opts Options) (Sum
 	}
 
 	for _, c := range work {
+		// progressFor turns a finished company into what the caller's log needs, including the reason
+		// an unresolved one was not resolved.
 		res, err := r.resolveOne(ctx, client, c, homepages[c.Article], sum.RunID, opts)
 		if err != nil {
 			// The run continues - a 1,500-company pass that stops at the first bad host is not
@@ -199,7 +210,7 @@ func (r Runner) Run(ctx context.Context, companies []Company, opts Options) (Sum
 			sum.Unresolved++
 		}
 		if opts.Progress != nil {
-			opts.Progress(Progress{Slug: c.Slug, Resolved: res.Resolved()})
+			opts.Progress(progressFor(c.Slug, res))
 		}
 	}
 
@@ -229,6 +240,30 @@ func (r Runner) Run(ctx context.Context, companies []Company, opts Options) (Sum
 //
 // The rules are here rather than in SQL because they interact with the flags, and a misread flag
 // combination silently resolving the wrong set is worse than an explicit loop.
+// progressFor describes a finished company for the caller's log.
+func progressFor(slug string, res store.Resolution) Progress {
+	p := Progress{Slug: slug, Resolved: res.Resolved(), Attempts: len(res.Attempts)}
+	seen := map[string]bool{}
+	for _, attempt := range res.Attempts {
+		if attempt.Source != "" && !seen[attempt.Source] {
+			seen[attempt.Source] = true
+			p.Sources = append(p.Sources, attempt.Source)
+		}
+	}
+	if p.Resolved {
+		return p
+	}
+	if len(res.Attempts) == 0 {
+		p.Reason = "no_candidates"
+		return p
+	}
+	p.Reason = "no_acceptable_candidate"
+	if reason := string(res.Attempts[len(res.Attempts)-1].Reason); reason != "" {
+		p.Reason = reason
+	}
+	return p
+}
+
 func (r Runner) selectWork(companies []Company, opts Options, sum *Summary) []Company {
 	allowed := map[string]bool{}
 	for _, slug := range opts.OnlySlugs {

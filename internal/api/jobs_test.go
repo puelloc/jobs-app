@@ -155,6 +155,22 @@ func TestBatchArgsFromBody_Full(t *testing.T) {
 	}
 }
 
+// A trial sweep is the difference between "run all 436 companies" and "run these three and look at
+// the logs", and it has to be reachable without the CLI.
+func TestBatchArgsFromBody_TrialSweep(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/batch",
+		strings.NewReader(`{"limit":3,"only_slugs":["cisco","dolby","  ","humana"]}`))
+	args, err := batchArgsFromBody(req)
+	if err != nil {
+		t.Fatalf("batchArgsFromBody: %v", err)
+	}
+	// The blank entry is dropped rather than becoming a company named "".
+	want := []string{"-limit", "3", "-only-slugs", "cisco,dolby,humana"}
+	if strings.Join(args, "|") != strings.Join(want, "|") {
+		t.Errorf("args = %v, want %v", args, want)
+	}
+}
+
 func TestBatchArgsFromBody_EmptyBodyIsNoArgs(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/batch", nil)
 	args, err := batchArgsFromBody(req)

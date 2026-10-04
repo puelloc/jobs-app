@@ -26,6 +26,8 @@ import sys
 import time
 from urllib.parse import urlparse
 
+from block_detect import classify as classify_block
+
 # Path tokens that identify an individual posting (vs nav/footer links). Kept broad on purpose:
 # the caller can tighten with --link-pattern once a vendor's shape is known.
 JOB_PATH_TOKENS = (
@@ -183,11 +185,31 @@ def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
             page = browser.new_context().new_page()
             page.set_default_timeout(timeout_ms)
 
-            page.goto(listings_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            listings_response = page.goto(listings_url, wait_until="domcontentloaded", timeout=timeout_ms)
             try:
                 page.wait_for_load_state("networkidle", timeout=min(8000, timeout_ms))
             except PlaywrightTimeoutError:
                 pass
+
+            # A challenge or block page returns 200 and renders fine, so the page has to be read for
+            # what it says rather than trusted for having loaded. Left undetected, a CAPTCHA looks
+            # exactly like a company with no openings.
+            listings_block = classify_block(
+                status=listings_response.status if listings_response else None,
+                title=page.title(),
+                text=page.evaluate("() => document.body.innerText || ''"),
+            )
+            if listings_block.blocked:
+                return {
+                    "listings_url": listings_url,
+                    "found": 0,
+                    "total_links": 0,
+                    "elapsed_sec": round(time.monotonic() - started, 1),
+                    "blocked": True,
+                    "block_reason": listings_block.reason,
+                    "block_evidence": listings_block.evidence,
+                    "jobs": [],
+                }
 
             anchors = page.evaluate(
                 "() => Array.from(document.querySelectorAll('a[href]')).map(a => "
@@ -214,11 +236,23 @@ def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
                     time.sleep(crawl_delay)
                 rec = {"url": p["url"], "title": p["title"], "description": None, "raw_data": None}
                 try:
-                    page.goto(p["url"], wait_until="domcontentloaded", timeout=timeout_ms)
+                    posting_response = page.goto(p["url"], wait_until="domcontentloaded", timeout=timeout_ms)
                     try:
                         page.wait_for_load_state("networkidle", timeout=min(8000, timeout_ms))
                     except PlaywrightTimeoutError:
                         pass
+
+                    # Annotated, never dropped: the posting is advertised either way, so it belongs in
+                    # the observed set (which drives stale-closure) even when its body is a block page
+                    # rather than a job description.
+                    posting_block = classify_block(
+                        status=posting_response.status if posting_response else None,
+                        title=page.title(),
+                        text=page.evaluate("() => document.body.innerText || ''"),
+                    )
+                    if posting_block.blocked:
+                        rec["block_reason"] = posting_block.reason
+                        rec["block_evidence"] = posting_block.evidence
 
                     # Embedded JobPosting JSON is the richest source (title/description/location/date).
                     ld = page.evaluate(
@@ -262,6 +296,9 @@ def fetch(listings_url: str, max_jobs: int, max_body_bytes: int, timeout_s: int,
         "found": len(jobs),
         "total_links": total_links,
         "elapsed_sec": round(time.monotonic() - started, 1),
+        "blocked": False,
+        "block_reason": "",
+        "block_evidence": "",
         "jobs": jobs,
     }
 

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"jobsapp/internal/logging"
@@ -202,7 +203,22 @@ type batchOptions struct {
 	SkipTraced        bool   `json:"skip_traced"`
 	FromSlug          string `json:"from_slug"`
 	StopAfterFailures int    `json:"stop_after_failures"`
-	Limit             int    `json:"limit"`
+	// Limit caps how many companies the sweep visits, which is what makes a short trial sweep possible
+	// without touching the CLI. OnlySlugs narrows it to named companies instead.
+	Limit     int      `json:"limit"`
+	OnlySlugs []string `json:"only_slugs"`
+}
+
+// cleanSlugs trims a caller-supplied slug list and drops empties, so a stray comma in a form field
+// cannot turn into a company named "".
+func cleanSlugs(slugs []string) []string {
+	out := make([]string, 0, len(slugs))
+	for _, slug := range slugs {
+		if trimmed := strings.TrimSpace(slug); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 // batchArgsFromBody decodes the batch request body into the flags cmd/batch understands. An empty
@@ -235,6 +251,9 @@ func batchArgsFromBody(r *http.Request) ([]string, error) {
 	}
 	if opts.Limit > 0 {
 		args = append(args, "-limit", strconv.Itoa(opts.Limit))
+	}
+	if slugs := cleanSlugs(opts.OnlySlugs); len(slugs) > 0 {
+		args = append(args, "-only-slugs", strings.Join(slugs, ","))
 	}
 	return args, nil
 }

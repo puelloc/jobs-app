@@ -37,6 +37,10 @@ type probeAnswer struct {
 	HasRemoteSoftwareRoles  bool   `json:"has_remote_software_roles"`
 	RemoteSoftwareRoleCount int    `json:"remote_software_role_count"`
 	Evidence                string `json:"evidence"`
+	// Blocked separates "this board has no openings" from "this board would not show us anything".
+	// The two look identical from the outside and need opposite responses.
+	Blocked     bool   `json:"blocked"`
+	BlockReason string `json:"block_reason"`
 }
 
 type probeOutput struct {
@@ -52,6 +56,7 @@ type fetchJob struct {
 	Description  string  `json:"description"`
 	RawData      string  `json:"raw_data"`
 	Error        string  `json:"error"`
+	BlockReason  string  `json:"block_reason"`
 	Country      *string `json:"country"`
 	LocationText *string `json:"location_text"`
 	IsUS         *bool   `json:"is_us"`
@@ -60,6 +65,10 @@ type fetchJob struct {
 type fetchOutput struct {
 	Jobs       []fetchJob `json:"jobs"`
 	TotalLinks int        `json:"total_links"`
+	// A listings page that challenges or blocks us renders successfully and yields nothing, which is
+	// indistinguishable from an empty board without this.
+	Blocked     bool   `json:"blocked"`
+	BlockReason string `json:"block_reason"`
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -190,6 +199,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// recently resolved URL is reused verbatim and the agent is skipped entirely. It runs only on a
 	// cold cache, past the TTL, or when the caller forces a re-resolve.
 	listingsURL, resolvedFrom := "", "agent"
+	// blocked/blockReason record a challenge or refusal rather than a finding. Carried out of the agent
+	// phase so the cache decision and the summary can both see it.
+	blocked, blockReason := false, ""
 	// remoteConfirmed is the verdict the resolving agent reached. It is cached alongside the URL,
 	// because a re-sweep that reads only the URL cannot tell a remote-filtered search page from a
 	// company's unfiltered job board - and would store on-site roles as remote.
@@ -312,11 +324,24 @@ func run(args []string, stdout, stderr io.Writer) int {
 			slog.String("evidence", probe.Answer.Evidence),
 		)
 
+		blocked = probe.Answer.Blocked
+		blockReason = probe.Answer.BlockReason
+
 		// Cache the URL and the verdict together, whatever the verdict was. Caching only the positive
 		// one - as this did before - left the majority of companies (the ones with nothing open)
-		// re-running the agent on every single sweep. A failed write is logged, not fatal: the scrape
-		// itself is unaffected, and the only cost is re-running the agent next time.
-		if err := store.SetCompanyListingsURL(ctx, database, company.ID, listingsURL, remoteConfirmed); err != nil {
+		// re-running the agent on every single sweep.
+		//
+		// A BLOCK is the exception, and an important one: a challenge page produces the same
+		// "no remote roles" answer as an empty board, and caching that would freeze a transient block
+		// into a fact for the whole TTL. A blocked company is retried instead. A failed write is
+		// logged, not fatal: the scrape itself is unaffected.
+		if blocked {
+			logger.Warn("not caching a blocked verdict",
+				slog.String("span", "agent"),
+				slog.String("block_reason", blockReason),
+				slog.String("listings_url", listingsURL),
+			)
+		} else if err := store.SetCompanyListingsURL(ctx, database, company.ID, listingsURL, remoteConfirmed); err != nil {
 			fmt.Fprintf(stderr, "scrape: cache listings url for %s: %v\n", company.Slug, err)
 		}
 	}
@@ -383,6 +408,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Diagnose a zero: how many links were on the rendered page vs how many the heuristic kept.
 	fmt.Fprintf(stdout, "run_id=%d company=%s fetch: page_links=%d extracted=%d\n",
 		runID, company.Slug, fetched.TotalLinks, len(fetched.Jobs))
+
+	// A blocked listings page is a failure, not an empty board: it renders fine and yields nothing, so
+	// reporting it as a successful zero would hide the block and let -skip-ok skip the company forever.
+	if fetched.Blocked {
+		finish("error", 0, 0, 0, fmt.Sprintf("blocked: %s", fetched.BlockReason))
+		fmt.Fprintf(stdout, "run_id=%d company=%s blocked=1 reason=%s listings=%s\n",
+			runID, company.Slug, fetched.BlockReason, listingsURL)
+		logger.Warn("listings page blocked",
+			slog.String("span", "fetch"),
+			slog.String("block_reason", fetched.BlockReason),
+			slog.String("listings_url", listingsURL),
+		)
+		return 1
+	}
 	logger.Info("fetch",
 		slog.String("span", "fetch"),
 		slog.String("listings_url", listingsURL),
@@ -408,9 +447,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// ever replace the agent's per-company verdict.
 	postings := make([]jobposting.Posting, len(fetched.Jobs))
 	remoteEvidence := 0
+	// Posting pages that were blocked or failed, counted by reason. One line per sweep is enough to
+	// see that a board is fighting us; one line per posting would drown everything else.
+	blockedPostings := map[string]int{}
+	erroredPostings := map[string]int{}
 	for i, j := range fetched.Jobs {
 		if j.URL != "" {
 			observed[store.ExternalID(extPattern, j.URL)] = struct{}{}
+		}
+		if j.BlockReason != "" {
+			blockedPostings[j.BlockReason]++
+		}
+		if j.Error != "" {
+			erroredPostings[firstWords(j.Error, 6)]++
 		}
 		posting, ok := jobposting.Parse(j.RawData)
 		if !ok {
@@ -420,6 +469,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if posting.Remote != nil {
 			remoteEvidence++
 		}
+	}
+
+	if len(blockedPostings) > 0 || len(erroredPostings) > 0 {
+		logger.Warn("some postings were not readable",
+			slog.String("span", "fetch"),
+			slog.Any("blocked_by_reason", blockedPostings),
+			slog.Any("errored_by_kind", erroredPostings),
+			slog.Int("postings", len(fetched.Jobs)),
+		)
 	}
 
 	// 3. Store: upsert the US postings (the deterministic US-only filter).
@@ -504,6 +562,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	logger.Info("summary",
 		slog.String("span", "summary"),
 		slog.String("resolution", resolvedFrom),
+		slog.Bool("blocked", blocked),
+		slog.String("block_reason", blockReason),
 		slog.String("listings_url", listingsURL),
 		slog.Int("found", len(fetched.Jobs)),
 		slog.Int("inserted", inserted),
@@ -520,6 +580,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout)
 	return 0
+}
+
+// firstWords reduces an error message to a bounded key, so a tally groups by kind rather than by the
+// one detail that varies between two otherwise identical failures.
+func firstWords(text string, n int) string {
+	fields := strings.Fields(text)
+	if len(fields) > n {
+		fields = fields[:n]
+	}
+	return strings.Join(fields, " ")
 }
 
 // externalIDPattern reads the vendor playbook's external_id_pattern, or "" when absent.
