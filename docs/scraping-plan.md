@@ -3,8 +3,9 @@
 > **Status: implemented.** This workstream is now built and runs end to end. The pipeline is:
 > `sp1500` (index companies) → `sp1500 resolve` (careers URLs) → `sp1500 validate` (browser-check,
 > optional) → `classify -commit` (ATS vendor) → `batch` (listings sweep, one company at a time). It
-> is driven from the web UI's "Trigger a job" buttons and monitored via the runs dashboard, the run
-> detail page, and the Logs page. The full sweep is UI-controllable too: "Full scrape sweep" accepts
+> is driven from the web UI's Pipeline panel (which lists the steps in order and marks the next one to
+> run) and monitored via the runs dashboard, the run detail page, and the Logs page. The full sweep is
+> UI-controllable too: its "Scrape listings" action accepts
 > `skip_ok` (skip companies whose last run succeeded), `skip_traced` (skip companies whose last run
 > left a browser-use trace), `from_slug` (resume point) and `stop_after_failures` (halt after a run
 > of failures). Each company pre-flights the model host and fails fast (exit code 6) if Ollama cannot

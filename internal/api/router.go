@@ -36,6 +36,7 @@ func NewRouter(db *sql.DB, dataDir string, scrapeCmd []string) http.Handler {
 	mux.HandleFunc("GET /api/logs/server", handleGetServerLog(dataDir))
 	mux.HandleFunc("GET /api/sweep/position", handleGetSweepPosition(dataDir))
 	mux.HandleFunc("POST /api/companies/{id}/scrape", handleScrapeCompany(db, dataDir, scrapeCmd, runner))
+	mux.HandleFunc("GET /api/pipeline/status", handleGetPipelineStatus(db))
 	mux.HandleFunc("POST /api/pipeline/{name}", handleTriggerJob(db, dataDir, runner))
 	mux.HandleFunc("GET /api/pipeline/{id}/log", handleGetJobLog(dataDir))
 

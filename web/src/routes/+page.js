@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { getRuns, getSweepPosition } from '$lib/api.js';
+import { getPipelineStatus, getRuns, getSweepPosition } from '$lib/api.js';
 
 // Server-rendered: this runs during SSR so the first HTML response already
 // contains the runs. The page then re-runs it on an interval via invalidate to
@@ -20,12 +20,20 @@ export async function load({ url, fetch, depends }) {
 		error(failure?.status ?? 500, failure?.message ?? 'Could not load runs');
 	}
 
-	// The resume point is best-effort: a failure to read it must not break the page.
+	// The resume point and the readiness counts are best-effort: a failure to read either must not
+	// break the page, which still has the runs to show.
 	let sweep = { present: false, slug: '' };
 	try {
 		sweep = await getSweepPosition({ fetch });
 	} catch {
 		// Leave the default "no resume point".
+	}
+
+	let status = null;
+	try {
+		status = await getPipelineStatus({ fetch });
+	} catch {
+		// Leave status null; the pipeline panel then says it cannot tell.
 	}
 
 	return {
@@ -34,6 +42,7 @@ export async function load({ url, fetch, depends }) {
 		limit: data.limit,
 		offset: data.offset,
 		q,
-		sweep
+		sweep,
+		status
 	};
 }

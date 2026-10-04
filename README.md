@@ -64,8 +64,9 @@ That script handles the `PUID`/`PGID` ownership of `./data` (SQLite must be writ
 container user), rebuilds with `docker compose up -d --build --remove-orphans`, and reports any
 restart-loop or API failure. The API is on host port `8094`, the UI on `8095`.
 
-A fresh `./data` volume starts empty. Populate it from the UI's "Trigger a job" buttons (on the Runs
-dashboard) in this order, or with the equivalent `docker compose run` commands:
+A fresh `./data` volume starts empty. The Runs dashboard's **Pipeline** panel lists these steps in
+order, shows which are done and which is next, and says whether the sweep's cache is warm; the buttons
+there run them. The equivalent commands are:
 
 ```
 docker compose run --rm app sp1500                                # 1. index the S&P 500/400/600 companies
@@ -83,7 +84,8 @@ at a time, so SQLite sees one writer and the model host sees one browser agent. 
 -vendor <vendor>` runs a single company instead, and `scraper` refreshes the separate RemoteOK job
 source. The `./data` volume carries `jobs.db` and the per-run agent traces across recreations.
 
-The full sweep is driven from the UI ("Full scrape sweep" on the Runs dashboard), not the CLI. It
+The full sweep is driven from the UI (the Pipeline panel's "Scrape listings" on the Runs dashboard),
+not the CLI. It
 takes options the CLI also accepts via `batch -skip-ok -skip-traced -from-slug <slug>
 -stop-after-failures N`:
 

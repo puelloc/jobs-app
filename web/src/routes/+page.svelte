@@ -38,13 +38,66 @@
 		}
 	}
 
-	const jobs = [
-		{ name: 'sp1500', label: 'Bootstrap companies' },
-		{ name: 'resolve', label: 'Resolve career sites' },
-		{ name: 'validate', label: 'Validate career sites' },
-		{ name: 'classify', label: 'Classify vendors' },
-		{ name: 'scraper', label: 'Refresh RemoteOK' }
-	];
+	// The pipeline, as an ordered list rather than five buttons the operator has to sequence in their
+	// head. Each state is derived from what exists right now, so the panel cannot claim progress the
+	// database does not agree with. Steps 1-3 are one-time setup; the sweep is separate below, because
+	// it is the recurring action rather than a step that completes.
+	const status = $derived(data.status);
+	const scrapeTargets = $derived(status?.scrape_targets ?? 0);
+	const openJobs = $derived(status?.open_jobs ?? 0);
+	const cachedURLs = $derived(status?.cached_listings_urls ?? 0);
+	const readyToScrape = $derived(scrapeTargets > 0);
+
+	const steps = $derived.by(() => {
+		const s = status;
+		if (!s) return [];
+		return [
+			{
+				n: 1,
+				name: 'Index companies',
+				job: 'sp1500',
+				action: 'Index',
+				detail: `${s.companies.toLocaleString()} companies`,
+				done: s.companies > 0,
+				ready: true
+			},
+			{
+				n: 2,
+				name: 'Find each company’s careers site',
+				job: 'resolve',
+				action: 'Find sites',
+				detail: `${s.career_site_urls.toLocaleString()} careers URLs`,
+				done: s.career_site_urls > 0,
+				ready: s.companies > 0
+			},
+			{
+				n: 3,
+				name: 'Classify the applicant-tracking vendor',
+				job: 'classify',
+				action: 'Classify',
+				detail: `${s.scrape_targets.toLocaleString()} ready to scrape`,
+				done: s.scrape_targets > 0,
+				ready: s.career_site_urls > 0
+			}
+		];
+	});
+
+	// The first step that is not done and can be run. It gets the emphasis, so "what do I do next?"
+	// has an answer on the page rather than in the pipeline's documentation.
+	const nextStep = $derived(steps.find((s) => !s.done && s.ready)?.n ?? 0);
+
+	// What the sweep will actually cost, which is the listings-URL cache's warmth. Saying it plainly
+	// is the point: a cold cache means the next sweep pays the browser agent for every company, and
+	// the one after it does not.
+	const sweepHint = $derived.by(() => {
+		if (!status) return '';
+		if (scrapeTargets === 0) return 'Nothing to sweep yet — finish the steps above first.';
+		if (cachedURLs === 0) {
+			return `Cache is cold. This sweep runs the browser agent for all ${scrapeTargets.toLocaleString()} companies and fills the cache as it goes — so this one is slow and the next one is fast.`;
+		}
+		const pct = Math.round((cachedURLs / scrapeTargets) * 100);
+		return `Cache is ${pct}% warm (${cachedURLs.toLocaleString()} of ${scrapeTargets.toLocaleString()} companies resolved), so this sweep skips the browser agent for those.`;
+	});
 
 	let pending = $state('');
 	let triggerError = $state('');
@@ -162,6 +215,119 @@
 		<p class="sub">Scraper and validation job runs · {total} total · refreshes every 5s</p>
 	</div>
 
+	<section class="section">
+		<h2>Pipeline</h2>
+
+		{#if !status}
+			<p class="quiet">
+				Could not read the pipeline's state, so this panel cannot say what is ready. The runs
+				below are still live.
+			</p>
+		{:else if readyToScrape}
+			<p class="lead">
+				Setup is done. To collect jobs, run the sweep at the bottom of this panel — steps 1–3
+				are already finished and do not need running again.
+			</p>
+		{:else}
+			<p class="lead">Run these in order. Each step feeds the next.</p>
+		{/if}
+
+		{#if steps.length > 0}
+			<ol class="steps">
+				{#each steps as step (step.n)}
+					<li class="step" class:done={step.done} class:next={step.n === nextStep}>
+						<span class="num" aria-hidden="true">{step.done ? '✓' : step.n}</span>
+						<span class="step-body">
+							<span class="step-name">{step.name}</span>
+							<span class="step-detail">{step.detail}</span>
+						</span>
+						<button
+							class="trigger"
+							disabled={pending !== '' || !step.ready}
+							onclick={() => trigger(step.job)}
+						>
+							{pending === step.job ? 'Starting…' : step.done ? 'Re-run' : step.action}
+						</button>
+					</li>
+				{/each}
+			</ol>
+		{/if}
+
+		<div class="sweep-run" class:ready={readyToScrape}>
+			<span class="step-body">
+				<span class="step-name">Scrape listings</span>
+				<span class="step-detail">
+					{scrapeTargets.toLocaleString()} companies · {openJobs.toLocaleString()} open jobs
+				</span>
+			</span>
+
+			{#if sweepHint}
+				<p class="hint">{sweepHint}</p>
+			{/if}
+
+			<div class="sweep-actions">
+				<button
+					class="trigger primary"
+					disabled={pending !== '' || !readyToScrape}
+					onclick={triggerSweep}
+				>
+					{pending === 'batch' ? 'Starting…' : 'Run sweep'}
+				</button>
+				{#if data.sweep?.present}
+					<button class="trigger" disabled={pending !== ''} onclick={resumeSweep}>
+						{pending === 'batch' ? 'Starting…' : `Resume from ${data.sweep.slug}`}
+					</button>
+				{/if}
+			</div>
+
+			<details class="options" open={Boolean(data.sweep?.present)}>
+				<summary>Sweep options</summary>
+				<div class="sweep">
+					<label class="check">
+						<input type="checkbox" bind:checked={sweepSkipOk} />
+						Skip companies whose last run succeeded
+					</label>
+					<label class="check">
+						<input type="checkbox" bind:checked={sweepSkipTraced} />
+						Skip companies with a browser-use trace
+					</label>
+					<label class="field">
+						<span>Start after slug</span>
+						<input
+							type="text"
+							bind:value={sweepFromSlug}
+							placeholder="optional, e.g. abbott-laboratories"
+						/>
+					</label>
+					<label class="field">
+						<span>Stop after N failures</span>
+						<input
+							type="number"
+							min="0"
+							step="1"
+							bind:value={sweepStopAfter}
+							placeholder="0 = never"
+						/>
+					</label>
+				</div>
+			</details>
+		</div>
+
+		{#if triggerError}
+			<p class="error">{triggerError}</p>
+		{/if}
+
+		<p class="optional">
+			Optional:
+			<button class="link" disabled={pending !== ''} onclick={() => trigger('validate')}>
+				{pending === 'validate' ? 'starting…' : 'validate careers sites'}
+			</button>
+			<button class="link" disabled={pending !== ''} onclick={() => trigger('scraper')}>
+				{pending === 'scraper' ? 'starting…' : 'refresh RemoteOK'}
+			</button>
+		</p>
+	</section>
+
 	<form class="search" method="get" action="/">
 		<input
 			type="search"
@@ -174,63 +340,6 @@
 			<a class="clear" href="/">Clear</a>
 		{/if}
 	</form>
-
-	<section class="section">
-		<h2>Trigger a job</h2>
-		<div class="trigger-row">
-			{#each jobs as job (job.name)}
-				<button
-					class="trigger"
-					disabled={pending !== ''}
-					onclick={() => trigger(job.name)}
-				>
-					{pending === job.name ? 'Starting…' : job.label}
-				</button>
-			{/each}
-		</div>
-		{#if triggerError}
-			<p class="error">{triggerError}</p>
-		{/if}
-	</section>
-
-	<section class="section">
-		<h2>Full scrape sweep</h2>
-		<p class="sweep-hint">
-			Scrapes every classified company, one at a time. Check a box to re-run only the companies
-			that still need it — “skip by trace” is the reliable signal that browser-use actually
-			ran, since a run can report success even when the agent died before its first step.
-		</p>
-		<div class="sweep">
-			<label class="check">
-				<input type="checkbox" bind:checked={sweepSkipOk} />
-				Skip companies whose last run succeeded
-			</label>
-			<label class="check">
-				<input type="checkbox" bind:checked={sweepSkipTraced} />
-				Skip companies with a browser-use trace
-			</label>
-			<label class="field">
-				<span>Start after slug</span>
-				<input
-					type="text"
-					bind:value={sweepFromSlug}
-					placeholder="optional, e.g. abbott-laboratories"
-				/>
-			</label>
-			<label class="field">
-				<span>Stop after N failures</span>
-				<input type="number" min="0" step="1" bind:value={sweepStopAfter} placeholder="0 = never" />
-			</label>
-			<button class="trigger" disabled={pending !== ''} onclick={triggerSweep}>
-				{pending === 'batch' ? 'Starting…' : 'Run sweep'}
-			</button>
-			{#if data.sweep?.present}
-				<button class="trigger resume" disabled={pending !== ''} onclick={resumeSweep}>
-					{pending === 'batch' ? 'Starting…' : `Resume from ${data.sweep.slug}`}
-				</button>
-			{/if}
-		</div>
-	</section>
 
 	<section class="section">
 		<h2>Running</h2>
@@ -509,10 +618,139 @@
 		cursor: not-allowed;
 	}
 
-	.trigger-row {
+	.lead {
+		margin: 0 0 0.75rem;
+		font-size: 0.9rem;
+	}
+
+	/* The ordered setup steps. A step that is done reads as settled; the next one to run is marked so
+	   the page answers "what now?" without the operator scanning the list. */
+	.steps {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+
+	.step {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		padding: 0.55rem 0.75rem;
+		background: #ffffff;
+		border: 1px solid #e4e7ec;
+		border-radius: 8px;
+	}
+
+	.step.done {
+		background: #fafbfc;
+	}
+
+	.step.next {
+		border-color: #1a56c4;
+	}
+
+	.step .num {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.5rem;
+		height: 1.5rem;
+		flex: 0 0 1.5rem;
+		border-radius: 999px;
+		background: #eef0f3;
+		color: #6b7178;
+		font-size: 0.78rem;
+		font-weight: 650;
+	}
+
+	.step.done .num {
+		background: #e7f4ea;
+		color: #1a7f37;
+	}
+
+	.step.next .num {
+		background: #1a56c4;
+		color: #ffffff;
+	}
+
+	.step-body {
+		display: flex;
+		flex-direction: column;
+		gap: 0.05rem;
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+
+	.step-name {
+		font-weight: 600;
+	}
+
+	.step-detail {
+		color: #6b7178;
+		font-size: 0.82rem;
+	}
+
+	/* The sweep is the recurring action, not a step that completes, so it stands apart from the list
+	   and gets the emphasis once the setup steps are done. */
+	.sweep-run {
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+		margin-top: 0.75rem;
+		padding: 0.85rem 0.9rem;
+		background: #ffffff;
+		border: 1px solid #e4e7ec;
+		border-radius: 8px;
+	}
+
+	.sweep-run.ready {
+		border-color: #1a56c4;
+	}
+
+	.hint {
+		margin: 0;
+		color: #6b7178;
+		font-size: 0.85rem;
+	}
+
+	.sweep-actions {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.5rem;
+	}
+
+	.options summary {
+		cursor: pointer;
+		font-size: 0.85rem;
+		color: #1a56c4;
+	}
+
+	.options .sweep {
+		margin-top: 0.6rem;
+	}
+
+	.optional {
+		margin: 0.75rem 0 0;
+		color: #8a9099;
+		font-size: 0.82rem;
+	}
+
+	.link {
+		padding: 0;
+		border: 0;
+		background: none;
+		color: #1a56c4;
+		font: inherit;
+		text-decoration: underline;
+		cursor: pointer;
+	}
+
+	.link:disabled {
+		color: #8a9099;
+		cursor: not-allowed;
 	}
 
 	.trigger {
@@ -533,15 +771,10 @@
 		cursor: not-allowed;
 	}
 
-	.trigger.resume {
+	.trigger.resume,
+	.trigger.primary {
 		background: #1a56c4;
 		border-color: #1a56c4;
-	}
-
-	.sweep-hint {
-		margin: 0 0 0.6rem;
-		color: #6b7178;
-		font-size: 0.82rem;
 	}
 
 	.sweep {

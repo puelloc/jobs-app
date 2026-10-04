@@ -5,10 +5,14 @@ SvelteKit dashboard over the Go API. Six screens:
 - **Runs** at `/` — the status and history of every `scrape_runs` row: running runs first, then
   finished ones, with a **search box** (case-insensitive over platform and status, e.g. `batch` or
   `error`) and a **Load more** button so history beyond the first page is reachable. This is the
-  control center: the **Trigger a job** buttons (bootstrap / resolve / validate / classify / RemoteOK)
-  launch the pipeline, the **Full scrape sweep** panel runs the browser-use sweep with skip options
-  and a **"Resume from `<slug>`"** button (shown whenever a previous sweep stopped and left a resume
-  point), and each running run gets **pause / resume / stop** and a **watch →** link.
+  control center, and a **Pipeline** panel leads it: the setup steps in order (index companies → find
+  careers sites → classify vendor), each step's state derived from what exists in the database rather
+  than remembered by the client, the next one to run marked, and a plain statement of whether the
+  sweep's listings-URL cache is warm — which is what decides whether a sweep is slow. The sweep itself
+  sits below the steps as the recurring action, with its options (skip companies already done, start
+  after a slug, stop after N failures) behind a disclosure and a **"Resume from `<slug>`"** button
+  whenever a previous sweep left a resume point. Each running run gets **pause / resume / stop** and a
+  **watch →** link.
 - **Run detail** at `/runs/[id]` — one run's status and counters, its output, and (for
   `career_listings` runs) the live agent trace (the `step`/`done` events the browser-use worker
   writes). For self-tracked jobs (resolve/validate/scraper/bootstrap) the output shown is the shared
@@ -91,6 +95,7 @@ build locally.
 | `GET /api/pipeline/{id}/log` | **yes** — a run's per-run output |
 | `GET /api/logs/server` | **yes** — the Logs page, and self-tracked runs' output |
 | `GET /api/sweep/position` | **yes** — the sweep panel's "Resume from `<slug>`" button |
+| `GET /api/pipeline/status` | **yes** — the Pipeline panel's per-step state and cache warmth |
 | `GET /api/traces/{id}` | **yes** — a `career_listings` run's live agent trace |
 | `POST /api/companies/{id}/scrape` | **yes** — a company's Scrape button |
 | `GET /api/companies` | **yes** — the company directory (`/companies`) |

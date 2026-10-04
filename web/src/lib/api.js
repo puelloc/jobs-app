@@ -249,3 +249,17 @@ export async function getServerLog(options = {}) {
 export async function getSweepPosition(options = {}) {
 	return getJSON(`/api/sweep/position`, options);
 }
+
+/**
+ * The pipeline's readiness counts, so the Runs page can say which step to run next rather than
+ * expecting the operator to know the order.
+ * @param {{ fetch?: typeof fetch }} [options]
+ * @returns {Promise<{
+ *   companies: number, career_site_urls: number, scrape_targets: number,
+ *   cached_listings_urls: number, confirmed_remote_roles: number,
+ *   jobs: number, open_jobs: number, companies_with_jobs: number
+ * }>}
+ */
+export async function getPipelineStatus(options = {}) {
+	return getJSON(`/api/pipeline/status`, options);
+}
