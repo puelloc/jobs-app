@@ -8,7 +8,14 @@
 > UI-controllable too: its "Scrape listings" action accepts
 > `skip_ok` (skip companies whose last run succeeded), `skip_traced` (skip companies whose last run
 > left a browser-use trace), `from_slug` (resume point) and `stop_after_failures` (halt after a run
-> of failures). Each company pre-flights the model host and fails fast (exit code 6) if Ollama cannot
+> of failures, `limit`, and `only_slugs`).
+>
+> Those options compose in a fixed order, and the order is the subtle part: `only_slugs` is an exact
+> selection and goes first, `from_slug` is positional within what remains, the skip rules drop companies
+> that need no work, and **`limit` is applied last** - to the companies that will actually be scraped. A
+> cap applied before the skip rules spends its whole quota on companies it is about to skip, so "run 5,
+> skipping anything already traced" could scrape nothing and report success. `planSweep` in
+> `cmd/batch/main.go` owns that order and is covered by `cmd/batch/plan_test.go`. Each company pre-flights the model host and fails fast (exit code 6) if Ollama cannot
 > be reached after 3 retries, which stops the sweep; the sweep writes its resume point before each
 > company so the UI can resume with one click. See `README.md` (Deploy) and `web/README.md` for the
 > current shape; this document is the plan it was built from.

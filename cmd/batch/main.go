@@ -68,18 +68,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	defer func() { _ = database.Close() }()
 
 	ctx := context.Background()
-	targets, err := store.ListScrapeTargets(ctx, database, *limit)
+	// Every candidate, uncapped. The cap has to apply to the companies that will actually be scraped,
+	// not to the pool they are drawn from (see planSweep).
+	candidates, err := store.ListScrapeTargets(ctx, database, 0)
 	if err != nil {
 		fmt.Fprintf(stderr, "batch: list targets: %v\n", err)
 		return 1
 	}
-	if slugs := splitSlugs(*onlySlugs); len(slugs) > 0 {
-		targets = filterTargets(targets, slugs)
-	}
-	if *fromSlug != "" {
-		targets = filterFromSlug(targets, *fromSlug)
-	}
-	if len(targets) == 0 {
+	if len(candidates) == 0 {
 		fmt.Fprintln(stdout, "batch: no eligible companies (need a career URL and a classified vendor)")
 		return 0
 	}
@@ -102,28 +98,52 @@ func run(args []string, stdout, stderr io.Writer) int {
 		sweepIdentity,
 	)
 	childEnv := append(os.Environ(), logger.Identity().Env()...)
+
+	targets, skipNotes, considered := planSweep(
+		candidates,
+		splitSlugs(*onlySlugs),
+		*fromSlug,
+		*limit,
+		func(t store.ScrapeTarget) string { return shouldSkip(t, *skipOK, *skipTraced, cfg.DataDir) },
+	)
+	for _, note := range skipNotes {
+		fmt.Fprintf(stdout, "[%d/%d] company=%s skip (%s)\n", note.Index+1, considered, note.Slug, note.Reason)
+		logger.Info("company skipped",
+			slog.Int("index", note.Index+1), slog.Int("of", considered),
+			slog.String("company", note.Slug), slog.String("reason", note.Reason),
+		)
+	}
+	if len(targets) == 0 {
+		// Two different empties, and only one of them means "you asked for nothing".
+		if len(skipNotes) > 0 {
+			fmt.Fprintf(stdout,
+				"batch: nothing to do: all %d candidate(s) matched a skip rule (skip-ok=%t skip-traced=%t)\n",
+				len(skipNotes), *skipOK, *skipTraced)
+			logger.Info("nothing to do",
+				slog.Int("skipped", len(skipNotes)), slog.Int("considered", considered))
+		} else {
+			fmt.Fprintln(stdout, "batch: no companies matched -only-slugs/-from-slug")
+			logger.Info("nothing to do", slog.Int("considered", considered), slog.String("reason", "filters"))
+		}
+		return 0
+	}
+
 	logger.Info("sweep started",
 		slog.Int("companies", len(targets)),
+		slog.Int("candidates", considered),
+		slog.Int("skipped", len(skipNotes)),
 		slog.Bool("skip_ok", *skipOK),
 		slog.Bool("skip_traced", *skipTraced),
 		slog.String("from_slug", *fromSlug),
+		slog.Int("limit", *limit),
 		slog.Int("stop_after_failures", *stopAfter),
 	)
 
 	fmt.Fprintf(stdout, "batch: %d companies, sequential (skip-ok=%t skip-traced=%t)\n",
 		len(targets), *skipOK, *skipTraced)
-	ok, failed, skipped, consecutive := 0, 0, 0, 0
+	ok, failed, skipped, consecutive := 0, 0, len(skipNotes), 0
 	stoppedEarly := false
 	for i, t := range targets {
-		if reason := shouldSkip(t, *skipOK, *skipTraced, cfg.DataDir); reason != "" {
-			skipped++
-			fmt.Fprintf(stdout, "[%d/%d] company=%s skip (%s)\n", i+1, len(targets), t.Slug, reason)
-			logger.Info("company skipped",
-				slog.Int("index", i+1), slog.Int("of", len(targets)),
-				slog.String("company", t.Slug), slog.String("reason", reason),
-			)
-			continue
-		}
 		if i > 0 && *delay > 0 {
 			time.Sleep(*delay)
 		}
@@ -195,8 +215,65 @@ func run(args []string, stdout, stderr io.Writer) int {
 		slog.Int("total", len(targets)),
 		slog.Bool("stopped_early", stoppedEarly),
 	)
-	fmt.Fprintf(stdout, "batch done: ok=%d failed=%d skipped=%d total=%d\n", ok, failed, skipped, len(targets))
+	// considered, not len(targets): the tally should add up (planned + skipped), so "total" means every
+	// company this sweep looked at rather than only the ones it ran.
+	fmt.Fprintf(stdout, "batch done: ok=%d failed=%d skipped=%d total=%d\n", ok, failed, skipped, considered)
 	return 0
+}
+
+// skipNote is a company this sweep decided not to visit, and why.
+type skipNote struct {
+	// Index is the company's position in the filtered candidate list, so a skip line points at the same
+	// list the run was drawn from.
+	Index  int
+	Slug   string
+	Reason string
+}
+
+// planSweep decides which companies a sweep will actually visit, and which it will not.
+//
+// The ORDER is the whole point, and getting it wrong is subtle enough to have shipped once:
+//
+//  1. -only-slugs is an exact selection, so it is applied first. A cap applied before it would take the
+//     first N companies alphabetically and then filter, which can drop the slug that was asked for while
+//     the quota is already spent.
+//  2. -from-slug is positional within what remains.
+//  3. Companies that need no work (already done, already traced) are dropped.
+//  4. -limit is applied LAST, to the list that will really be run.
+//
+// Applying the cap at step 1 - which is what the caller used to do - meant a request for 5 companies
+// with "skip companies with a trace" could scrape nothing at all: five already-traced candidates
+// consumed the entire quota, and the sweep reported a successful zero.
+func planSweep(
+	candidates []store.ScrapeTarget,
+	onlySlugs []string,
+	fromSlug string,
+	limit int,
+	skip func(store.ScrapeTarget) string,
+) (planned []store.ScrapeTarget, skipped []skipNote, considered int) {
+	filtered := candidates
+	if len(onlySlugs) > 0 {
+		filtered = filterTargets(filtered, onlySlugs)
+	}
+	if fromSlug != "" {
+		filtered = filterFromSlug(filtered, fromSlug)
+	}
+	considered = len(filtered)
+
+	planned = make([]store.ScrapeTarget, 0, considered)
+	for i, target := range filtered {
+		// The cap is tested before the skip rule, not after: that rule stats a trace file per company,
+		// and there is no sense deciding about companies the quota has already excluded.
+		if limit > 0 && len(planned) >= limit {
+			break
+		}
+		if reason := skip(target); reason != "" {
+			skipped = append(skipped, skipNote{Index: i, Slug: target.Slug, Reason: reason})
+			continue
+		}
+		planned = append(planned, target)
+	}
+	return planned, skipped, considered
 }
 
 // shouldSkip returns a non-empty reason when the target should be skipped under the given options,

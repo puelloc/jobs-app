@@ -92,7 +92,7 @@ build locally.
 | `GET /api/runs/{id}` | **yes** — a run's detail (`/runs/{id}`) |
 | `POST /api/runs/{id}/stop` | **yes** — the stop button |
 | `POST /api/runs/{id}/pause` / `resume` | **yes** — the pause/resume button |
-| `POST /api/pipeline/{name}` | **yes** — the trigger buttons (`sp1500`, `resolve`, `validate`, `classify`, `batch`, `scraper`); `batch` also accepts a JSON body with the sweep options (`skip_ok`, `skip_traced`, `from_slug`, `stop_after_failures`, `limit`) |
+| `POST /api/pipeline/{name}` | **yes** — the trigger buttons (`sp1500`, `resolve`, `validate`, `classify`, `batch`, `scraper`); `batch` also accepts a JSON body with the sweep options (`skip_ok`, `skip_traced`, `from_slug`, `stop_after_failures`, `limit`, `only_slugs`) |
 | `GET /api/pipeline/{id}/log` | **yes** — a run's per-run output |
 | `GET /api/logs/server` | **yes** — the Logs page, and self-tracked runs' output |
 | `GET /api/sweep/position` | **yes** — the sweep panel's "Resume from `<slug>`" button |
