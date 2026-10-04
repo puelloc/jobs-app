@@ -291,6 +291,45 @@ class TestStatus(unittest.TestCase):
         self.assertIn("container", got["labels"])
         self.assertEqual(got["label_values"]["app"], ["apply-app", "jobs-app"], "values come back sorted")
 
+    def test_counts_tell_you_what_is_actually_arriving(self) -> None:
+        """The value list comes from the index and can name levels nothing is logging; the counts are
+        the truth, and they are what stops an agent chasing an error that is not there."""
+        fake = FakeLoki(
+            labels=["level", "app", "svc"],
+            values={"level": ["info", "error", "critical"], "app": ["jobs-app"], "svc": ["server"]},
+            instants={
+                'sum by (level) (count_over_time({level=~".+"} [86400s]))': {"data": {"result": [
+                    {"metric": {"level": "info"}, "value": [1, "305"]},
+                ]}},
+                'sum by (app) (count_over_time({app=~".+"} [86400s]))': {"data": {"result": [
+                    {"metric": {"app": "jobs-app"}, "value": [1, "272"]},
+                ]}},
+                'sum by (svc) (count_over_time({svc=~".+"} [86400s]))': {"data": {"result": [
+                    {"metric": {"svc": "server"}, "value": [1, "272"]},
+                ]}},
+            },
+        )
+        got = LogKit(fake).status("24h")
+        self.assertIn("error", got["label_values"]["level"], "the index still lists it")
+        self.assertNotIn("error", got["counts_in_window"]["level"], "but nothing is logging it")
+        self.assertEqual(got["counts_in_window"]["level"], {"info": 305})
+        self.assertIn("from the index", got["note"])
+
+    def test_nothing_arriving_is_called_out_as_a_collector_problem(self) -> None:
+        fake = FakeLoki(
+            labels=["level"],
+            values={"level": ["info"]},
+            instants={'sum by (level) (count_over_time({level=~".+"} [3600s]))':
+                      {"data": {"result": []}}},
+        )
+        got = LogKit(fake).status("1h")
+        self.assertEqual(got["counts_in_window"]["level"], {})
+        self.assertIn("collector rather than at a quiet system", got["note"])
+
+    def test_only_known_labels_are_interpolated_into_a_query(self) -> None:
+        with self.assertRaises(LogKitError):
+            LogKit(FakeLoki())._value_counts("level} | drop_all", timedelta(hours=1))
+
     def test_a_failing_store_is_reported_not_raised_blindly(self) -> None:
         class Broken(Loki):
             def _get(self, path: str, params: dict) -> dict:

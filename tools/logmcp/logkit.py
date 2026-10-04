@@ -27,6 +27,9 @@ DEFAULT_LOKI = "http://127.0.0.1:3100"
 CONTAINER_PROBLEM_PATTERN = "(?i)panic|fatal|oomkill|out of memory|traceback|exit status|unhandled"
 
 
+# Labels worth counting, and the only names allowed into a generated query.
+COUNTED_LABELS = ("level", "app", "svc")
+
 # Identifier fields, where 0 means "never set" rather than a value. See parsed_line.
 ID_FIELDS = {"run_id", "sweep_id", "listing_id", "application_id", "console_run_id"}
 
@@ -226,18 +229,66 @@ class LogKit:
 
     # ------------------------------------------------------------------ tools
 
+    def _value_counts(self, name: str, span: timedelta) -> dict[str, int]:
+        """How many lines each value of a label actually has in the window."""
+        if name not in COUNTED_LABELS:
+            # The name is interpolated into a query, so it may only ever come from this list.
+            raise LogKitError(f"refusing to count unknown label {name!r}")
+        seconds = max(1, int(span.total_seconds()))
+        body = self.loki.query_instant(
+            f'sum by ({name}) (count_over_time({{{name}=~".+"}} [{seconds}s]))'
+        )
+        counts: dict[str, int] = {}
+        for result in (body.get("data") or {}).get("result") or []:
+            metric = result.get("metric") or {}
+            value = result.get("value") or [None, "0"]
+            try:
+                counts[metric.get(name) or ""] = int(float(value[1]))
+            except (TypeError, ValueError, IndexError):
+                continue
+        return counts
+
     def status(self, window: str = "24h") -> dict:
-        """What is in the store and which labels exist, so a caller can orient before querying."""
+        """What the store holds, which labels exist, and what is actually arriving.
+
+        The value lists matter less than they look. Loki's label API reports values from the *index*,
+        not from the window, so against a real store it happily lists `level=error` when nothing has
+        logged an error for days - and an agent reading that as "there are errors" would chase a ghost.
+        Pairing each value with its count here also distinguishes "the system is quiet" from "the
+        collector is broken", which look identical from a list of values.
+        """
         span = parse_window(window)
         labels = self.loki.labels(span)
-        values = {}
-        for name in ("app", "svc", "level"):
-            if name in labels:
-                try:
-                    values[name] = self.loki.label_values(name, span)
-                except LogKitError:
-                    values[name] = []
-        return {"loki_url": self.loki.url, "window": str(span), "labels": labels, "label_values": values}
+        values: dict[str, list] = {}
+        counts: dict[str, dict] = {}
+        for name in COUNTED_LABELS:
+            if name not in labels:
+                continue
+            try:
+                values[name] = self.loki.label_values(name, span)
+            except LogKitError:
+                values[name] = []
+            try:
+                counts[name] = self._value_counts(name, span)
+            except LogKitError:
+                counts[name] = {}
+
+        note = (
+            "label_values come from the index and can include values with no lines in this window; "
+            "counts_in_window is what is actually arriving"
+        )
+        # `"level" in counts` rather than a truthiness test: an empty count dict is the strongest form
+        # of this signal - nothing logged at any level - and `{}` is falsy, so it would be missed.
+        if "level" in counts and not any(counts["level"].values()):
+            note += " - and nothing is, which points at the collector rather than at a quiet system"
+        return {
+            "loki_url": self.loki.url,
+            "window": str(span),
+            "labels": labels,
+            "label_values": values,
+            "counts_in_window": counts,
+            "note": note,
+        }
 
     def search_logs(
         self,
