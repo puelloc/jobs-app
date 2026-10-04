@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -68,6 +69,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	timeout := fs.Duration("timeout", 20*time.Minute, "whole-scrape budget")
 	minCrawlDelay := fs.Duration("min-crawl-delay", 0, "floor on the per-host delay between fetches")
 	runIDFlag := fs.Int64("run-id", 0, "existing scrape_runs id to finish (0 starts a new one)")
+	listingsURLTTL := fs.Duration("listings-url-ttl", 7*24*time.Hour,
+		"reuse a cached filtered listings URL for this long before re-resolving it with the agent (0 = always re-resolve)")
+	refreshListingsURL := fs.Bool("refresh-listings-url", false,
+		"ignore the cached listings URL and re-resolve it with the agent")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -156,108 +161,142 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	// 0. Politeness: honor the careers origin's robots.txt before the agent touches it.
-	careersPolicy, err := robots.Fetch(ctx, httpClient, company.CareerSiteURL, cfg.UserAgent)
-	if err != nil {
-		finish("error", 0, 0, 0, fmt.Sprintf("robots: %v", err))
-		fmt.Fprintf(stderr, "scrape: robots %s: %v\n", company.CareerSiteURL, err)
-		return 1
-	}
-	if !careersPolicy.Allowed(company.CareerSiteURL, cfg.UserAgent) {
-		finish("ok", 0, 0, 0, "")
-		fmt.Fprintf(stdout, "run_id=%d company=%s robots=disallowed url=%s\n",
-			runID, company.Slug, company.CareerSiteURL)
-		return 0
-	}
-
-	// 1. Agent: find the filtered listings URL, writing the live trace as it goes. Pre-flight the
-	// model host first so a down Ollama fails this company fast instead of launching Chromium and
-	// then hanging on the first LLM call.
-	if err := ollamaReachable(ctx, probeClient, cfg.OllamaHost); err != nil {
-		finish("error", 0, 0, 0, err.Error())
-		fmt.Fprintf(stderr, "scrape: %v\n", err)
-		return exitcode.OllamaUnreachable
+	// 1. Resolve the filtered listings URL. The agent that finds it is the slow part of a scrape - a
+	// local-model navigation loop - and its answer is stable for a company from sweep to sweep, so a
+	// recently resolved URL is reused verbatim and the agent is skipped entirely. It runs only on a
+	// cold cache, past the TTL, or when the caller forces a re-resolve.
+	listingsURL, resolvedFrom := "", "agent"
+	if cached, ok := reuseCachedListingsURL(company, time.Now().UTC(), *listingsURLTTL, *refreshListingsURL); ok {
+		listingsURL, resolvedFrom = cached, "cache"
+		// The cached path never runs the agent, so this run would otherwise have no trace at all -
+		// and the run page, the -skip-traced sweep option, and the job page's "why did this match"
+		// section all read one. Record the resolution the agent would have produced.
+		appendTraceEvent(trace, map[string]any{
+			"event":        "resolution",
+			"source":       "cache",
+			"listings_url": cached,
+			"resolved_at":  company.ListingsURLResolvedAt,
+		})
+		fmt.Fprintf(stdout, "run_id=%d company=%s listings_url=cache resolved_at=%s url=%s\n",
+			runID, company.Slug, company.ListingsURLResolvedAt, cached)
 	}
 
-	probeOut, err := exec.CommandContext(ctx, python, "worker/remote_roles_probe.py",
-		"--url", company.CareerSiteURL,
-		"--company", company.Name,
-		"--host", cfg.OllamaHost,
-		"--model", cfg.BrowserUseModel,
-		"--max-steps", fmt.Sprintf("%d", *maxSteps),
-		"--trace", trace,
-	).Output()
-	if err != nil {
-		// The worker process failed. Re-check the host: if Ollama is down now, that is the cause
-		// and the batch runner should stop; otherwise it is an ordinary agent failure.
-		fmt.Fprintf(stderr, "scrape: agent: %v\n", err)
-		return classifyAgentFailure(fmt.Sprintf("agent: %v", err))
-	}
-	var probe probeOutput
-	if err := json.Unmarshal(probeOut, &probe); err != nil {
-		finish("error", 0, 0, 0, fmt.Sprintf("parse agent output: %v", err))
-		fmt.Fprintf(stderr, "scrape: parse agent output: %v\n", err)
-		return 1
-	}
-	if !probe.OK {
-		// The agent itself failed (exception or timeout). Keep the reason: log it and mark the run
-		// as error rather than silently folding it into "0 found".
-		errText := probe.Error
-		if errText == "" && probe.Timeout {
-			errText = "agent timed out"
+	// The careers-page crawl delay only exists on the agent path; the cached path never touches the
+	// careers page, so it has nothing to contribute here.
+	var careersCrawlDelay time.Duration
+
+	if listingsURL == "" {
+		// 0. Politeness: honor the careers origin's robots.txt before the agent touches it.
+		careersPolicy, err := robots.Fetch(ctx, httpClient, company.CareerSiteURL, cfg.UserAgent)
+		if err != nil {
+			finish("error", 0, 0, 0, fmt.Sprintf("robots: %v", err))
+			fmt.Fprintf(stderr, "scrape: robots %s: %v\n", company.CareerSiteURL, err)
+			return 1
 		}
-		fmt.Fprintf(stdout, "run_id=%d company=%s agent_failed=1 error=%q timeout=%t\n",
-			runID, company.Slug, probe.Error, probe.Timeout)
-		return classifyAgentFailure(errText)
-	}
-	if probe.Answer == nil || probe.Answer.ListingsURL == "" {
-		finish("ok", 0, 0, 0, "")
-		evidence := ""
-		if probe.Answer != nil {
-			evidence = probe.Answer.Evidence
+		if !careersPolicy.Allowed(company.CareerSiteURL, cfg.UserAgent) {
+			finish("ok", 0, 0, 0, "")
+			fmt.Fprintf(stdout, "run_id=%d company=%s robots=disallowed url=%s\n",
+				runID, company.Slug, company.CareerSiteURL)
+			return 0
 		}
-		fmt.Fprintf(stdout, "run_id=%d company=%s listings=none found=0 evidence=%q\n",
-			runID, company.Slug, evidence)
-		return 0
-	}
+		careersCrawlDelay = careersPolicy.CrawlDelay(cfg.UserAgent)
 
-	// Log what the agent decided: its evidence and the count it saw, so a later zero is diagnosable.
-	fmt.Fprintf(stdout, "run_id=%d company=%s agent: has_remote=%t count=%d evidence=%q\n",
-		runID, company.Slug, probe.Answer.HasRemoteSoftwareRoles,
-		probe.Answer.RemoteSoftwareRoleCount, probe.Answer.Evidence)
+		// Pre-flight the model host first so a down Ollama fails this company fast instead of
+		// launching Chromium and then hanging on the first LLM call.
+		if err := ollamaReachable(ctx, probeClient, cfg.OllamaHost); err != nil {
+			finish("error", 0, 0, 0, err.Error())
+			fmt.Fprintf(stderr, "scrape: %v\n", err)
+			return exitcode.OllamaUnreachable
+		}
 
-	// If the agent found no remote roles, there is nothing to scrape. Skip the fetch rather than
-	// extracting onsite postings and marking them remote.
-	if !probe.Answer.HasRemoteSoftwareRoles {
-		finish("ok", 0, 0, 0, "")
-		fmt.Fprintf(stdout, "run_id=%d company=%s no_remote_roles=true found=0 evidence=%q\n",
-			runID, company.Slug, probe.Answer.Evidence)
-		return 0
+		probeOut, err := exec.CommandContext(ctx, python, "worker/remote_roles_probe.py",
+			"--url", company.CareerSiteURL,
+			"--company", company.Name,
+			"--host", cfg.OllamaHost,
+			"--model", cfg.BrowserUseModel,
+			"--max-steps", fmt.Sprintf("%d", *maxSteps),
+			"--trace", trace,
+		).Output()
+		if err != nil {
+			// The worker process failed. Re-check the host: if Ollama is down now, that is the cause
+			// and the batch runner should stop; otherwise it is an ordinary agent failure.
+			fmt.Fprintf(stderr, "scrape: agent: %v\n", err)
+			return classifyAgentFailure(fmt.Sprintf("agent: %v", err))
+		}
+		var probe probeOutput
+		if err := json.Unmarshal(probeOut, &probe); err != nil {
+			finish("error", 0, 0, 0, fmt.Sprintf("parse agent output: %v", err))
+			fmt.Fprintf(stderr, "scrape: parse agent output: %v\n", err)
+			return 1
+		}
+		if !probe.OK {
+			// The agent itself failed (exception or timeout). Keep the reason: log it and mark the run
+			// as error rather than silently folding it into "0 found".
+			errText := probe.Error
+			if errText == "" && probe.Timeout {
+				errText = "agent timed out"
+			}
+			fmt.Fprintf(stdout, "run_id=%d company=%s agent_failed=1 error=%q timeout=%t\n",
+				runID, company.Slug, probe.Error, probe.Timeout)
+			return classifyAgentFailure(errText)
+		}
+		if probe.Answer == nil || probe.Answer.ListingsURL == "" {
+			finish("ok", 0, 0, 0, "")
+			evidence := ""
+			if probe.Answer != nil {
+				evidence = probe.Answer.Evidence
+			}
+			fmt.Fprintf(stdout, "run_id=%d company=%s listings=none found=0 evidence=%q\n",
+				runID, company.Slug, evidence)
+			return 0
+		}
+
+		// Log what the agent decided: its evidence and the count it saw, so a later zero is diagnosable.
+		fmt.Fprintf(stdout, "run_id=%d company=%s agent: has_remote=%t count=%d evidence=%q\n",
+			runID, company.Slug, probe.Answer.HasRemoteSoftwareRoles,
+			probe.Answer.RemoteSoftwareRoleCount, probe.Answer.Evidence)
+
+		// If the agent found no remote roles, there is nothing to scrape. Skip the fetch rather than
+		// extracting onsite postings and marking them remote.
+		if !probe.Answer.HasRemoteSoftwareRoles {
+			finish("ok", 0, 0, 0, "")
+			fmt.Fprintf(stdout, "run_id=%d company=%s no_remote_roles=true found=0 evidence=%q\n",
+				runID, company.Slug, probe.Answer.Evidence)
+			return 0
+		}
+
+		listingsURL = probe.Answer.ListingsURL
+
+		// Cache the resolution so the next sweep can skip the agent. A failed write is logged, not
+		// fatal: the scrape itself is unaffected, and the only cost is re-running the agent next time.
+		if err := store.SetCompanyListingsURL(ctx, database, company.ID, listingsURL); err != nil {
+			fmt.Fprintf(stderr, "scrape: cache listings url for %s: %v\n", company.Slug, err)
+		}
 	}
 
 	// 2. Fetch: honor the listings origin's robots.txt too, then render and extract.
-	listingsPolicy, err := robots.Fetch(ctx, httpClient, probe.Answer.ListingsURL, cfg.UserAgent)
+	listingsPolicy, err := robots.Fetch(ctx, httpClient, listingsURL, cfg.UserAgent)
 	if err != nil {
 		finish("error", 0, 0, 0, fmt.Sprintf("robots listings: %v", err))
-		fmt.Fprintf(stderr, "scrape: robots %s: %v\n", probe.Answer.ListingsURL, err)
+		fmt.Fprintf(stderr, "scrape: robots %s: %v\n", listingsURL, err)
 		return 1
 	}
-	if !listingsPolicy.Allowed(probe.Answer.ListingsURL, cfg.UserAgent) {
+	if !listingsPolicy.Allowed(listingsURL, cfg.UserAgent) {
 		finish("ok", 0, 0, 0, "")
 		fmt.Fprintf(stdout, "run_id=%d company=%s robots=disallowed listings=%s\n",
-			runID, company.Slug, probe.Answer.ListingsURL)
+			runID, company.Slug, listingsURL)
 		return 0
 	}
 	crawlDelay := listingsPolicy.CrawlDelay(cfg.UserAgent)
-	if d := careersPolicy.CrawlDelay(cfg.UserAgent); d > crawlDelay {
-		crawlDelay = d
+	if careersCrawlDelay > crawlDelay {
+		crawlDelay = careersCrawlDelay
 	}
 	if *minCrawlDelay > crawlDelay {
 		crawlDelay = *minCrawlDelay
 	}
 
 	fetchArgs := []string{"worker/listings_fetch.py",
-		"--url", probe.Answer.ListingsURL,
+		"--url", listingsURL,
 		"--max-jobs", fmt.Sprintf("%d", *maxJobs),
 	}
 	if crawlDelay > 0 {
@@ -353,8 +392,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	finish("ok", int64(inserted+refreshed+skipped), int64(inserted), int64(refreshed), "")
-	fmt.Fprintf(stdout, "run_id=%d company=%s listings=%s found=%d inserted=%d refreshed=%d skipped=%d closed=%d",
-		runID, company.Slug, probe.Answer.ListingsURL, len(fetched.Jobs), inserted, refreshed, skipped, closed)
+	fmt.Fprintf(stdout, "run_id=%d company=%s listings=%s resolution=%s found=%d inserted=%d refreshed=%d skipped=%d closed=%d",
+		runID, company.Slug, listingsURL, resolvedFrom, len(fetched.Jobs), inserted, refreshed, skipped, closed)
 	if staleNote != "" {
 		fmt.Fprintf(stdout, " stale=skipped reason=%s", staleNote)
 	}
@@ -389,6 +428,49 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// reuseCachedListingsURL decides whether a previously resolved filtered listings URL can stand in for
+// a fresh agent run. It returns the URL to use and true when the cache is usable.
+//
+// The cache is usable when a URL was stored, the caller did not ask to re-resolve, and the stored
+// resolution is newer than ttl. ttl <= 0 disables reuse, which is how a caller opts back into the
+// always-run-the-agent behavior without a second flag.
+//
+// An unparseable timestamp is treated as stale rather than trusted: one extra agent run is cheap next
+// to reusing a URL whose age is unknown.
+func reuseCachedListingsURL(c store.ScrapeCompany, now time.Time, ttl time.Duration, refresh bool) (string, bool) {
+	if refresh || c.ListingsURL == "" || ttl <= 0 {
+		return "", false
+	}
+	resolvedAt, err := time.Parse(time.RFC3339, c.ListingsURLResolvedAt)
+	if err != nil {
+		return "", false
+	}
+	if now.Sub(resolvedAt) > ttl {
+		return "", false
+	}
+	return c.ListingsURL, true
+}
+
+// appendTraceEvent appends one JSON object to a run's trace file, creating the directory and file if
+// they do not exist. The Python worker writes its own events in this same JSONL shape; this is how a
+// run that skipped the agent still leaves a trace that says so. Tracing is best-effort everywhere, so
+// a failure here is swallowed rather than failing a scrape that otherwise succeeded.
+func appendTraceEvent(path string, event map[string]any) {
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.Write(append(raw, '\n'))
 }
 
 // ollamaReachable probes the model host with a lightweight GET /api/tags (the cheapest "is Ollama

@@ -1,10 +1,13 @@
 <script>
-	import { formatTraceAction } from '$lib/format.js';
+	import { formatTraceAction, formatUtc } from '$lib/format.js';
 
 	/**
 	 * Renders one agent trace: the browser-use step events (thinking, next goal, actions) followed
 	 * by the terminal done event (success + final result). Shared by the run detail page and the job
 	 * detail page, where it answers "why was this posting deemed a match?".
+	 *
+	 * A `resolution` event is written by the scrape itself when it reused a cached listings URL, so
+	 * the trace records that no agent ran rather than rendering as empty.
 	 * @type {{ events?: any[], present?: boolean }}
 	 */
 	let { events = [], present = false } = $props();
@@ -31,7 +34,7 @@
 					{/if}
 					{#if ev.actions?.length}
 						<div class="actions">
-							{#each ev.actions as action}<code>{formatTraceAction(action)}</code>{/each}
+							{#each ev.actions as action, ai (ai)}<code>{formatTraceAction(action)}</code>{/each}
 						</div>
 					{/if}
 				</li>
@@ -42,6 +45,19 @@
 					</span>
 					<span class="steps">{ev.steps} steps</span>
 					{#if ev.final_result}<p class="final">{ev.final_result}</p>{/if}
+				</li>
+			{:else if ev.event === 'resolution'}
+				<li class="resolution">
+					<span class="badge badge-cached">Cached</span>
+					<span class="steps">
+						Listings URL reused{ev.resolved_at ? ` (resolved ${formatUtc(ev.resolved_at)})` : ''}
+						— the agent did not run this time.
+					</span>
+					{#if ev.listings_url}
+						<p class="final">
+							<a href={ev.listings_url} target="_blank" rel="noreferrer">{ev.listings_url}</a>
+						</p>
+					{/if}
 				</li>
 			{/if}
 		{/each}
@@ -133,6 +149,10 @@
 
 	.badge-error {
 		color: #c62828;
+	}
+
+	.badge-cached {
+		color: #1a56c4;
 	}
 
 	.steps {

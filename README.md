@@ -104,6 +104,20 @@ company the sweep writes its slug as a resume point (`<DATA_DIR>/sweep/resume`),
 can be continued with one click — the Runs dashboard's sweep panel shows a **"Resume from `<slug>`"**
 button whenever a resume point exists, and clears it when a sweep runs to completion.
 
+**The filtered listings URL is cached per company** (`companies.listings_url`, migration 018). The
+browser-use agent is by far the slowest part of a scrape — a local-model navigation loop — and the URL
+it finds is stable from one sweep to the next, so it is reused instead of re-derived. The agent runs
+only on a cold cache, past the TTL, or when asked to re-resolve:
+
+```
+scrape -slug <slug> -vendor <vendor> [-listings-url-ttl 168h] [-refresh-listings-url]
+```
+
+`-listings-url-ttl` defaults to 7 days; `0` restores the old always-run-the-agent behavior, and
+`-refresh-listings-url` forces a re-resolve once. A run that reused the cache says so — the summary
+line carries `resolution=cache`, and the run's trace gets a `resolution` event instead of being empty,
+which keeps `-skip-traced` and the job page's "Why this job matched" section meaningful.
+
 Each listings run records the company it scraped (`scrape_runs.company_id`, migration 016), which is
 what lets the skip decision know "did this company already succeed / already leave a trace". Each
 job posting records the run that scraped it too (`job_listings.scrape_run_id`, migration 017), so the

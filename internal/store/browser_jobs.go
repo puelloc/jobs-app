@@ -110,6 +110,11 @@ type ScrapeCompany struct {
 	Slug          string
 	Name          string
 	CareerSiteURL string
+	// ListingsURL is the filtered listings URL a previous scrape resolved and cached, or "" when the
+	// company has never been resolved. ListingsURLResolvedAt is when, as SQLite's RFC3339 UTC text
+	// ("" alongside an empty URL), which is what the TTL decision reads.
+	ListingsURL           string
+	ListingsURLResolvedAt string
 }
 
 // ScrapeCompanyBySlug returns the scrape inputs for a slug, or sql.ErrNoRows when there is no such
@@ -117,13 +122,51 @@ type ScrapeCompany struct {
 // mistaking it for a missing company.
 func ScrapeCompanyBySlug(ctx context.Context, q Querier, slug string) (ScrapeCompany, error) {
 	var c ScrapeCompany
-	err := q.QueryRowContext(ctx,
-		`SELECT id, slug, name, COALESCE(career_site_url, '') FROM companies WHERE slug = ?`, slug).
-		Scan(&c.ID, &c.Slug, &c.Name, &c.CareerSiteURL)
+	err := q.QueryRowContext(ctx, `
+SELECT id, slug, name,
+       COALESCE(career_site_url, ''),
+       COALESCE(listings_url, ''),
+       COALESCE(listings_url_resolved_at, '')
+  FROM companies WHERE slug = ?`, slug).
+		Scan(&c.ID, &c.Slug, &c.Name, &c.CareerSiteURL, &c.ListingsURL, &c.ListingsURLResolvedAt)
 	if err != nil {
 		return c, err
 	}
 	return c, nil
+}
+
+// SetCompanyListingsURL caches the filtered listings URL a scrape resolved for a company, so the next
+// sweep can skip the agent that found it. The timestamp is database-generated, matching every other
+// timestamp in the schema.
+func SetCompanyListingsURL(ctx context.Context, q Querier, companyID int64, url string) error {
+	var id int64
+	err := q.QueryRowContext(ctx, `
+UPDATE companies
+   SET listings_url             = ?,
+       listings_url_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+       updated_at               = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+ WHERE id = ?
+RETURNING id`, url, companyID).Scan(&id)
+	if err != nil {
+		return fmt.Errorf("cache listings url for company %d: %w", companyID, err)
+	}
+	return nil
+}
+
+// ClearCompanyListingsURL drops the cached URL so the next scrape re-resolves it with the agent.
+func ClearCompanyListingsURL(ctx context.Context, q Querier, companyID int64) error {
+	var id int64
+	err := q.QueryRowContext(ctx, `
+UPDATE companies
+   SET listings_url             = NULL,
+       listings_url_resolved_at = NULL,
+       updated_at               = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+ WHERE id = ?
+RETURNING id`, companyID).Scan(&id)
+	if err != nil {
+		return fmt.Errorf("clear listings url for company %d: %w", companyID, err)
+	}
+	return nil
 }
 
 // CompanySlugByID returns the slug for a company id, or sql.ErrNoRows.

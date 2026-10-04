@@ -283,3 +283,49 @@ func TestCompanyAndPlatformLookup(t *testing.T) {
 		t.Error("CompanyIDBySlug(does-not-exist) should return sql.ErrNoRows")
 	}
 }
+
+// The listings-URL cache is what lets a re-sweep skip the agent, so the round trip it depends on -
+// cold, set, clear - is worth pinning.
+func TestCompanyListingsURLCacheRoundTrip(t *testing.T) {
+	database := newTestDB(t)
+	ctx := context.Background()
+	if _, err := database.Exec(
+		`INSERT INTO companies (id, slug, name, career_site_url) VALUES (1, 'acme', 'Acme', 'https://acme.test/careers')`); err != nil {
+		t.Fatalf("seed company: %v", err)
+	}
+
+	cold, err := ScrapeCompanyBySlug(ctx, database, "acme")
+	if err != nil {
+		t.Fatalf("ScrapeCompanyBySlug: %v", err)
+	}
+	if cold.ListingsURL != "" || cold.ListingsURLResolvedAt != "" {
+		t.Errorf("cold cache = %q/%q, want both empty", cold.ListingsURL, cold.ListingsURLResolvedAt)
+	}
+
+	const url = "https://jobs.acme.test/search?query=engineer&remote=1"
+	if err := SetCompanyListingsURL(ctx, database, 1, url); err != nil {
+		t.Fatalf("SetCompanyListingsURL: %v", err)
+	}
+
+	warm, err := ScrapeCompanyBySlug(ctx, database, "acme")
+	if err != nil {
+		t.Fatalf("ScrapeCompanyBySlug after set: %v", err)
+	}
+	if warm.ListingsURL != url {
+		t.Errorf("ListingsURL = %q, want %q", warm.ListingsURL, url)
+	}
+	if _, err := time.Parse(time.RFC3339, warm.ListingsURLResolvedAt); err != nil {
+		t.Errorf("ListingsURLResolvedAt = %q, want RFC3339: %v", warm.ListingsURLResolvedAt, err)
+	}
+
+	if err := ClearCompanyListingsURL(ctx, database, 1); err != nil {
+		t.Fatalf("ClearCompanyListingsURL: %v", err)
+	}
+	cleared, err := ScrapeCompanyBySlug(ctx, database, "acme")
+	if err != nil {
+		t.Fatalf("ScrapeCompanyBySlug after clear: %v", err)
+	}
+	if cleared.ListingsURL != "" || cleared.ListingsURLResolvedAt != "" {
+		t.Errorf("after clear = %q/%q, want both empty", cleared.ListingsURL, cleared.ListingsURLResolvedAt)
+	}
+}
