@@ -26,6 +26,7 @@ import os
 import re
 import sqlite3
 import statistics
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -35,6 +36,12 @@ from datetime import datetime, timezone
 STEP_FIELDS = ("url", "next_goal", "thinking", "evaluation_previous_goal", "memory", "actions")
 
 DEFAULT_API = "https://jobapp.siggy-lab.org"
+
+# How long a cached run list may be reused before it is refetched. Short on purpose: a *stale* run list
+# is worse than a slow one - an agent asking "check the latest run" was answered from a snapshot an hour
+# old and reported the wrong run as newest. A minute keeps consecutive questions cheap without letting
+# the answer be wrong.
+SNAPSHOT_TTL_SECONDS = 60
 REMOTE_PAGE = 100  # the API caps limit at 100
 REMOTE_MAX_PAGES = 40  # 4000 runs; the live table is ~600 and growing slowly
 
@@ -99,6 +106,7 @@ class Lab:
         self.data_dir = data or os.environ.get("JOBS_DATA") or os.path.join(root, "data")
         self.api = (api or os.environ.get("JOBS_API") or DEFAULT_API).rstrip("/")
         self.cache_dir = cache or os.environ.get("TRACE_CACHE") or os.path.join(root, ".tracecache")
+        self._snapshot: dict = {}
 
     # ---------------------------------------------------------------- cache paths
 
@@ -121,11 +129,30 @@ class Lab:
     def runs(self, refresh: bool = False) -> list[dict]:
         """Every known run, oldest first. A cached snapshot is reused unless refresh is asked for."""
         if self.source == "remote":
-            if refresh or not os.path.exists(self._runs_snapshot):
+            if refresh or self._snapshot_is_stale():
                 self._refresh_snapshot()
             with open(self._runs_snapshot, encoding="utf-8") as handle:
-                return json.load(handle)["runs"]
+                self._snapshot = json.load(handle)
+            return self._snapshot["runs"]
         return self._local_runs()
+
+    def snapshot_age_seconds(self) -> float | None:
+        """How old the run list is, for reporting. None when it has never been fetched."""
+        try:
+            return round(time.time() - os.path.getmtime(self._runs_snapshot), 1)
+        except OSError:
+            return None
+
+    def _snapshot_is_stale(self) -> bool:
+        """Whether the cached run list is missing or older than the TTL. Uses the file's mtime rather
+        than its contents, so the check costs a stat instead of a parse."""
+        if not os.path.exists(self._runs_snapshot):
+            return True
+        try:
+            age = time.time() - os.path.getmtime(self._runs_snapshot)
+        except OSError:
+            return True
+        return age > SNAPSHOT_TTL_SECONDS
 
     def _refresh_snapshot(self) -> None:
         runs: list[dict] = []

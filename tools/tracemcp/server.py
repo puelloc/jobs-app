@@ -79,6 +79,17 @@ RUN_FILTERS: dict = {
     "offset": {"type": "integer", "default": 0, "minimum": 0},
 }
 
+REFRESH: dict = {
+    "refresh": {
+        "type": "boolean",
+        "default": False,
+        "description": (
+            "Force a re-read of the run list from the API. The list is cached for 60 seconds and "
+            "refreshed automatically once older than that, so this is only needed to be certain."
+        ),
+    },
+}
+
 TOOLS: list[dict] = [
     {
         "name": "list_runs",
@@ -87,7 +98,11 @@ TOOLS: list[dict] = [
             "duration, company and error text. Use this to find the runs worth investigating; use "
             "run_stats for the aggregate shape instead of paging through everything."
         ),
-        "inputSchema": {"type": "object", "properties": RUN_FILTERS, "additionalProperties": False},
+        "inputSchema": {
+            "type": "object",
+            "properties": {**RUN_FILTERS, **REFRESH},
+            "additionalProperties": False,
+        },
     },
     {
         "name": "run_stats",
@@ -101,6 +116,7 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 **RUN_FILTERS,
+                **REFRESH,
                 "with_traces": {
                     "type": "boolean",
                     "default": False,
@@ -249,6 +265,13 @@ def _lab() -> Lab:
     return Lab()
 
 
+def _fresh(lab: Lab, arguments: dict) -> None:
+    """Re-read the run list when asked. Without this the tools answer from a snapshot taken whenever the
+    server last looked, which is how "check the latest run" once returned an hour-old run as newest."""
+    if arguments.get("refresh"):
+        lab.runs(refresh=True)
+
+
 def _filter_kwargs(arguments: dict) -> dict:
     """Split a tool's arguments into the run-filter subset, so every tool takes the same vocabulary."""
     known = set(RUN_FILTERS)
@@ -257,12 +280,14 @@ def _filter_kwargs(arguments: dict) -> dict:
 
 def tool_list_runs(arguments: dict) -> dict:
     lab = _lab()
+    _fresh(lab, arguments)
     total = len(lab.query(**_filter_kwargs({**arguments, "limit": None, "offset": 0})))
     rows = lab.query(**_filter_kwargs(arguments))
     return {
         "matched": total,
         "returned": len(rows),
         "source": lab.source,
+        "run_list_age_s": lab.snapshot_age_seconds(),
         "runs": [
             {
                 "id": row["id"],
@@ -281,15 +306,19 @@ def tool_list_runs(arguments: dict) -> dict:
 
 def tool_run_stats(arguments: dict) -> dict:
     lab = _lab()
+    _fresh(lab, arguments)
     runs = lab.query(**_filter_kwargs({**arguments, "limit": None, "offset": 0}))
     stats = lab.stats(runs, with_traces=bool(arguments.get("with_traces")))
     stats["source"] = lab.source
     stats["cache_dir"] = lab.cache_dir
+    stats["run_list_age_s"] = lab.snapshot_age_seconds()
     return stats
 
 
 def tool_sync_traces(arguments: dict) -> dict:
     lab = _lab()
+    # Syncing means "the runs as they are now", so this one always refetches.
+    lab.runs(refresh=True)
     matched = len(lab.query(**_filter_kwargs({**arguments, "limit": None, "offset": 0})))
     runs = lab.query(**_filter_kwargs(
         {**arguments, "limit": arguments.get("max_runs") or 100, "offset": 0}
@@ -328,6 +357,7 @@ def tool_search_steps(arguments: dict) -> dict:
 
 def tool_step_stats(arguments: dict) -> dict:
     lab = _lab()
+    _fresh(lab, arguments)
     runs = lab.query(**_filter_kwargs({**arguments, "limit": None, "offset": 0}))
     stats = lab.step_stats(runs)
     stats["runs_matched"] = len(runs)

@@ -18,7 +18,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from tracekit import STEP_FIELDS, Lab, TraceKitError  # noqa: E402
+from tracekit import STEP_FIELDS, SNAPSHOT_TTL_SECONDS, Lab, TraceKitError  # noqa: E402
 
 
 def _write_jsonl(path: str, events: list[dict]) -> None:
@@ -319,6 +319,63 @@ class TestSync(LabTestCase):
         result = lab.sync([_remote_row(1)])
         self.assertEqual(result["failed"], 1)
         self.assertEqual(result["fetched"], 0)
+
+
+class TestSnapshotFreshness(unittest.TestCase):
+    """A stale run list is worse than a slow one: it answers "check the latest run" with the wrong run."""
+
+    def setUp(self) -> None:
+        self.root = tempfile.mkdtemp(prefix="tracekit-snap-")
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def _lab(self) -> Lab:
+        return Lab(source="remote", cache=os.path.join(self.root, "cache"), api="http://fake.test")
+
+    def test_a_missing_snapshot_is_stale(self) -> None:
+        lab = self._lab()
+        self.assertTrue(lab._snapshot_is_stale())
+        self.assertIsNone(lab.snapshot_age_seconds())
+
+    def test_a_fresh_snapshot_is_reused(self) -> None:
+        lab = self._lab()
+        os.makedirs(lab.cache_dir, exist_ok=True)
+        with open(lab._runs_snapshot, "w", encoding="utf-8") as handle:
+            handle.write('{"runs": []}')
+        self.assertFalse(lab._snapshot_is_stale())
+        self.assertLess(lab.snapshot_age_seconds(), SNAPSHOT_TTL_SECONDS)
+
+    def test_an_old_snapshot_is_refetched(self) -> None:
+        import time as _time
+
+        lab = self._lab()
+        os.makedirs(lab.cache_dir, exist_ok=True)
+        with open(lab._runs_snapshot, "w", encoding="utf-8") as handle:
+            handle.write('{"runs": []}')
+        old = _time.time() - (SNAPSHOT_TTL_SECONDS + 5)
+        os.utime(lab._runs_snapshot, (old, old))
+
+        self.assertTrue(lab._snapshot_is_stale())
+        self.assertGreaterEqual(lab.snapshot_age_seconds(), SNAPSHOT_TTL_SECONDS)
+
+    def test_runs_refetches_when_stale_and_serves_the_cache_when_not(self) -> None:
+        fetched = []
+
+        class Counting(Lab):
+            def _refresh_snapshot(self) -> None:
+                fetched.append(1)
+                os.makedirs(self.cache_dir, exist_ok=True)
+                with open(self._runs_snapshot, "w", encoding="utf-8") as handle:
+                    json.dump({"runs": [{"id": 1, "platform": "career_batch"}]}, handle)
+
+        lab = Counting(source="remote", cache=os.path.join(self.root, "cache2"), api="http://fake.test")
+        self.assertEqual(len(lab.runs()), 1)
+        self.assertEqual(len(fetched), 1)
+        # Immediately again: served from the cache, no second fetch.
+        self.assertEqual(len(lab.runs()), 1)
+        self.assertEqual(len(fetched), 1)
+        # Explicit refresh overrides the TTL.
+        lab.runs(refresh=True)
+        self.assertEqual(len(fetched), 2)
 
 
 class TestRemoteRunNormalisation(unittest.TestCase):
