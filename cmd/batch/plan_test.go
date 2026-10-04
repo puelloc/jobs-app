@@ -8,6 +8,9 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -176,5 +179,78 @@ func TestPlanSweepEmptyInputs(t *testing.T) {
 	planned, skipped, considered = planSweep(targets("a", "b"), []string{"nope"}, "", 5, skipSaying())
 	if len(planned) != 0 || len(skipped) != 0 || considered != 0 {
 		t.Errorf("unmatched slugs gave planned=%v skipped=%v considered=%d", planned, skipped, considered)
+	}
+}
+
+func TestShouldSkipRequiresASuccessfulRunForATraceToCount(t *testing.T) {
+	dir := t.TempDir()
+	// Two runs, each with trace events; only the status differs.
+	writeTrace(t, dir, 10)
+	writeTrace(t, dir, 11)
+
+	ok := "ok"
+	failed := "error"
+	runIDOK, runIDFailed := int64(10), int64(11)
+
+	cases := []struct {
+		name       string
+		target     store.ScrapeTarget
+		skipOK     bool
+		skipTraced bool
+		want       string
+	}{
+		{
+			name:       "a successful run with a trace is done",
+			target:     store.ScrapeTarget{LastRunID: &runIDOK, LastRunStatus: &ok},
+			skipTraced: true, want: "browser-use trace present",
+		},
+		{
+			// The regression: abbott-laboratories times out every sweep, leaves a few steps of trace, and
+			// was therefore skipped forever by the rule above - the company that most needed retrying.
+			name:       "a FAILED run with a trace is not done",
+			target:     store.ScrapeTarget{LastRunID: &runIDFailed, LastRunStatus: &failed},
+			skipTraced: true, want: "",
+		},
+		{
+			// And the resume point itself: the sweep that died mid-company left it failed with a partial
+			// trace, so this rule would have stepped silently past the company being resumed from.
+			name:       "an interrupted run with a trace is not done",
+			target:     store.ScrapeTarget{LastRunID: &runIDFailed, LastRunStatus: &failed},
+			skipTraced: true, skipOK: true, want: "",
+		},
+		{
+			name:   "skip-ok still keys on the status alone",
+			target: store.ScrapeTarget{LastRunID: &runIDOK, LastRunStatus: &ok},
+			skipOK: true, want: "last run ok",
+		},
+		{
+			name:   "a company never run is never skipped",
+			target: store.ScrapeTarget{},
+			skipOK: true, skipTraced: true, want: "",
+		},
+		{
+			name:   "neither rule on means nothing is skipped",
+			target: store.ScrapeTarget{LastRunID: &runIDOK, LastRunStatus: &ok},
+			want:   "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldSkip(tc.target, tc.skipOK, tc.skipTraced, dir); got != tc.want {
+				t.Errorf("shouldSkip(...) = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// writeTrace leaves a run with trace events, and returns nothing - the id is supplied by the caller.
+func writeTrace(t *testing.T, dir string, runID int64) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "traces"), 0o755); err != nil {
+		t.Fatalf("mkdir traces: %v", err)
+	}
+	line := `{"event":"step","step":1,"url":"https://example.test"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "traces", fmt.Sprintf("%d.jsonl", runID)), []byte(line), 0o644); err != nil {
+		t.Fatalf("write trace: %v", err)
 	}
 }

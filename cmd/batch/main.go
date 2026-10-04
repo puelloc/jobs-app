@@ -37,7 +37,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fromSlug := fs.String("from-slug", "", "start from this slug (alphabetical) and skip earlier companies")
 	stopAfter := fs.Int("stop-after-failures", 0, "stop after this many consecutive company failures (0 = never)")
 	skipOK := fs.Bool("skip-ok", false, "skip companies whose latest scrape run already finished ok")
-	skipTraced := fs.Bool("skip-traced", false, "skip companies whose latest scrape run left a non-empty browser-use trace")
+	skipTraced := fs.Bool("skip-traced", false,
+		"skip companies whose latest SUCCESSFUL scrape run left a browser-use trace (a failed or interrupted run leaves a partial trace, and those are the ones worth retrying)")
 	delay := fs.Duration("delay", 5*time.Second, "pause between companies")
 	scrapeCmd := fs.String("scrape-cmd", "", "command to run per company (default: config SCRAPE_COMMAND)")
 	sweepRunID := fs.Int64("run-id", 0,
@@ -282,10 +283,19 @@ func planSweep(
 // signal that browser-use actually ran, as opposed to a run that said "ok" while the agent died
 // before its first step). The two conditions are independent and OR'd together.
 func shouldSkip(t store.ScrapeTarget, skipOK, skipTraced bool, dataDir string) string {
-	if skipOK && t.LastRunStatus != nil && *t.LastRunStatus == "ok" {
+	finishedOK := t.LastRunStatus != nil && *t.LastRunStatus == "ok"
+	if skipOK && finishedOK {
 		return "last run ok"
 	}
-	if skipTraced && t.LastRunID != nil && traceHasEvents(dataDir, *t.LastRunID) {
+	// A trace only means "this company is done" when the run that left it succeeded.
+	//
+	// A failed or interrupted run leaves a partial trace too, and skipping on that alone skips exactly
+	// the companies worth retrying. abbott-laboratories is the worked example: it times out on every
+	// sweep, leaves a few steps of trace, and was therefore skipped forever by this rule - the one
+	// company that most needed another attempt. It also skips the company a resume point names, because
+	// the sweep that died mid-company left it with a partial trace and an `interrupted by restart`
+	// status, so resuming would silently step past the company being resumed from.
+	if skipTraced && finishedOK && t.LastRunID != nil && traceHasEvents(dataDir, *t.LastRunID) {
 		return "browser-use trace present"
 	}
 	return ""

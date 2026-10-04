@@ -201,7 +201,21 @@
 		pending = 'batch';
 		triggerError = '';
 		try {
-			const res = await postJob('batch', { from_slug: data.sweep.slug });
+			// The resume point overrides the typed "Start after slug"; every other option on screen
+			// applies exactly as it does for a fresh sweep. Sending only from_slug - which is what this
+			// did - silently discarded them, so "Companies to run: 5" resumed into a sweep of everything
+			// that was left.
+			const res = await postJob('batch', {
+				skip_ok: sweepSkipOk,
+				skip_traced: sweepSkipTraced,
+				from_slug: data.sweep.slug,
+				stop_after_failures: Number(sweepStopAfter) || 0,
+				limit: Number(sweepLimit) || 0,
+				only_slugs: sweepOnlySlugs
+					.split(',')
+					.map((slug) => slug.trim())
+					.filter(Boolean)
+			});
 			await goto(res.run_id ? `/runs/${res.run_id}` : '/');
 		} catch (failure) {
 			if (failure?.code === 'conflict') {
@@ -303,7 +317,7 @@
 					</label>
 					<label class="check">
 						<input type="checkbox" bind:checked={sweepSkipTraced} />
-						Skip companies with a browser-use trace
+						Skip companies a successful run left a trace for
 					</label>
 					<label class="field">
 						<span>Start after slug</span>

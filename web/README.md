@@ -12,7 +12,10 @@ SvelteKit dashboard over the Go API. Six screens:
   sits below the steps as the recurring action, with its options (skip companies already done, start
   after a slug, **cap how many companies to visit**, **run only named slugs**, stop after N failures)
   behind a disclosure and a **"Resume from `<slug>`"** button
-  whenever a previous sweep left a resume point. Each running run gets **pause / resume / stop** and a
+  whenever a previous sweep left a resume point. **Resume carries the options on screen too** — the
+resume point overrides the typed "Start after slug", and everything else (`limit`, the skip rules,
+stop-after-failures) applies as it does for a fresh sweep. Sending only `from_slug`, which is what it
+did, silently discarded them: a 5-company trial resumed into a full sweep. Each running run gets **pause / resume / stop** and a
   **watch →** link.
 - **Run detail** at `/runs/[id]` — one run's status and counters, its output, and (for
   `career_listings` runs) the live agent trace (the `step`/`done` events the browser-use worker
