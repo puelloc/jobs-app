@@ -91,12 +91,16 @@
 	// the one after it does not.
 	const sweepHint = $derived.by(() => {
 		if (!status) return '';
+		const total = scrapeTargets.toLocaleString();
 		if (scrapeTargets === 0) return 'Nothing to sweep yet — finish the steps above first.';
 		if (cachedURLs === 0) {
-			return `Cache is cold. This sweep runs the browser agent for all ${scrapeTargets.toLocaleString()} companies and fills the cache as it goes — so this one is slow and the next one is fast.`;
+			return `Cache is cold: this sweep runs the browser agent — the slow local model — for all ${total} companies, and caches each answer as it goes. The sweep after this one reuses them and runs no agent at all.`;
+		}
+		if (cachedURLs >= scrapeTargets) {
+			return 'Every company is cached, so this sweep runs no browser agent — only the fetch and the store.';
 		}
 		const pct = Math.round((cachedURLs / scrapeTargets) * 100);
-		return `Cache is ${pct}% warm (${cachedURLs.toLocaleString()} of ${scrapeTargets.toLocaleString()} companies resolved), so this sweep skips the browser agent for those.`;
+		return `Cache is ${pct}% warm (${cachedURLs.toLocaleString()} of ${total} companies). Those skip the browser agent; the rest run it once and are cached for next time.`;
 	});
 
 	let pending = $state('');
