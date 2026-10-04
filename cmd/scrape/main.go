@@ -102,6 +102,17 @@ func qualityNote(resolution string, remoteConfirmed bool, found, inserted, skipp
 	}
 }
 
+// runForwardingStderr runs cmd and returns its stdout, while letting its stderr reach the given writer.
+//
+// It exists because exec.Cmd.Output() with a nil Stderr captures the child's stderr into a 32KB buffer
+// and throws it away when the command succeeds. That silently swallowed everything the worker writes to
+// stderr: the per-step JSON emitted for the log store, and every Python traceback. A worker that died
+// inside its own code looked exactly like one that said nothing.
+func runForwardingStderr(cmd *exec.Cmd, stderr io.Writer) ([]byte, error) {
+	cmd.Stderr = stderr
+	return cmd.Output()
+}
+
 // round1 trims a duration to one decimal, which is all the precision a log line needs.
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
 
@@ -347,7 +358,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		)
 		agentStarted := time.Now()
 		probeCmd.Env = childEnv
-		probeOut, err := probeCmd.Output()
+		probeOut, err := runForwardingStderr(probeCmd, stderr)
 		if err != nil {
 			// The worker process failed. Re-check the host: if Ollama is down now, that is the cause
 			// and the batch runner should stop; otherwise it is an ordinary agent failure.

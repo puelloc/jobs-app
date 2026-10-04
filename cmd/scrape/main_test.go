@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"bytes"
 	"jobsapp/internal/store"
+	"os/exec"
 )
 
 func TestReuseCachedListingsURL(t *testing.T) {
@@ -144,5 +146,25 @@ func TestOllamaReachable_ConnectionRefusedRetries(t *testing.T) {
 	client := &http.Client{Timeout: time.Second}
 	if err := ollamaReachable(context.Background(), client, srv.URL); err == nil {
 		t.Fatal("ollamaReachable: want an error when the connection drops")
+	}
+}
+
+func TestRunForwardingStderrForwardsStderr(t *testing.T) {
+	// exec.Cmd.Output() with a nil Stderr captures the child's stderr into a buffer and discards it when
+	// the command succeeds, which swallowed the worker's per-step JSON and every Python traceback. This
+	// pins the behaviour that fixes it: stdout is still captured, stderr reaches the writer.
+	var forwarded bytes.Buffer
+	out, err := runForwardingStderr(
+		exec.Command("sh", "-c", "echo to-stdout; echo to-stderr >&2"),
+		&forwarded,
+	)
+	if err != nil {
+		t.Fatalf("runForwardingStderr: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "to-stdout" {
+		t.Errorf("stdout = %q, want to-stdout", got)
+	}
+	if got := strings.TrimSpace(forwarded.String()); got != "to-stderr" {
+		t.Errorf("forwarded stderr = %q, want to-stderr", got)
 	}
 }

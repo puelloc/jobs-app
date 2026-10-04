@@ -203,8 +203,15 @@ type Config struct {
 
 // Logger writes JSON lines with a base identity attached to each.
 type Logger struct {
-	inner *slog.Logger
-	id    Identity
+	// handler is the bare JSON handler, and every derived logger is built from it rather than from a
+	// logger that already carries an identity. Chaining .With() twice attached trace_id twice, which
+	// produced JSON with two trace_id keys - carrying two *different* values, so which one a reader saw
+	// was an accident of that reader's parser.
+	handler slog.Handler
+	app     string
+	service string
+	id      Identity
+	inner   *slog.Logger
 }
 
 // New builds a logger. The writer is usually stderr: stdout is the run's human-readable report, and
@@ -237,11 +244,7 @@ func New(cfg Config, id Identity) *Logger {
 		},
 	})
 
-	// app and svc are fixed for the process; the identity is attached by withIdentityAttrs so that
-	// trace_id is written exactly once and a narrowed logger can replace it.
-	base := &Logger{
-		inner: slog.New(handler).With(slog.String("app", cfg.App), slog.String("svc", cfg.Service)),
-	}
+	base := &Logger{handler: handler, app: cfg.App, service: cfg.Service}
 	return base.withIdentityAttrs(id)
 }
 
@@ -255,7 +258,11 @@ func (l *Logger) withIdentityAttrs(id Identity) *Logger {
 	if id.TraceID == "" {
 		id.TraceID = NewTraceID()
 	}
-	attrs := []any{slog.String("trace_id", id.TraceID)}
+	attrs := []any{
+		slog.String("app", l.app),
+		slog.String("svc", l.service),
+		slog.String("trace_id", id.TraceID),
+	}
 	if id.Span != "" {
 		attrs = append(attrs, slog.String("span", id.Span))
 	}
@@ -277,7 +284,13 @@ func (l *Logger) withIdentityAttrs(id Identity) *Logger {
 	if id.ConsoleRunID != nil {
 		attrs = append(attrs, slog.Int64("console_run_id", *id.ConsoleRunID))
 	}
-	return &Logger{inner: l.inner.With(attrs...), id: id}
+	return &Logger{
+		handler: l.handler,
+		app:     l.app,
+		service: l.service,
+		id:      id,
+		inner:   slog.New(l.handler).With(attrs...),
+	}
 }
 
 // With returns a logger for a narrower identity, sharing the handler. An empty TraceID inherits the
@@ -300,7 +313,13 @@ func (l *Logger) Error(msg string, args ...any) { l.inner.Error(msg, args...) }
 
 // Discard returns a logger that writes nothing, for tests that do not assert on output.
 func Discard() *Logger {
-	return &Logger{inner: slog.New(slog.NewJSONHandler(io.Discard, nil)), id: Identity{TraceID: NewTraceID()}}
+	return &Logger{
+		handler: slog.NewJSONHandler(io.Discard, nil),
+		app:     "discard",
+		service: "discard",
+		id:      Identity{TraceID: NewTraceID()},
+		inner:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
 }
 
 func parseLevel(value string) slog.Level {

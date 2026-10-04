@@ -356,3 +356,36 @@ func TestMiddlewareLogsAStateChangeWithItsReason(t *testing.T) {
 		t.Errorf("logged_because = %v, want state-changing", line["logged_because"])
 	}
 }
+
+func TestNoFieldIsWrittenTwice(t *testing.T) {
+	// The regression: New attached trace_id, and then With attached it again, so every request line
+	// carried two trace_id keys with two different values - and which one a reader believed depended on
+	// its JSON parser rather than on this code. Counting the raw string is the only assertion that
+	// catches a duplicate key, because decoding into a map silently keeps one.
+	var buf bytes.Buffer
+	base := New(Config{App: "jobs-app", Service: "server", Writer: &buf}, Identity{TraceID: NewTraceID()})
+	narrowed := base.With(Identity{TraceID: NewTraceID(), Span: "agent", Company: "acme"})
+	narrowed.Info("request")
+
+	raw := buf.String()
+	for _, key := range []string{"trace_id", "app", "svc"} {
+		if got := strings.Count(raw, `"`+key+`"`); got != 1 {
+			t.Errorf("%q appears %d times in one line, want exactly 1:\n%s", key, got, raw)
+		}
+	}
+}
+
+func TestNarrowingStillReplacesTheTraceWithoutDuplicatingIt(t *testing.T) {
+	var buf bytes.Buffer
+	base := New(Config{App: "jobs-app", Service: "server", Writer: &buf}, Identity{TraceID: NewTraceID()})
+	requestTrace := NewTraceID()
+	base.With(Identity{TraceID: requestTrace}).Info("request")
+
+	line := decode(t, &buf)
+	if line["trace_id"] != requestTrace {
+		t.Errorf("trace_id = %v, want the request's %q", line["trace_id"], requestTrace)
+	}
+	if line["app"] != "jobs-app" || line["svc"] != "server" {
+		t.Errorf("app/svc = %v/%v, want jobs-app/server", line["app"], line["svc"])
+	}
+}
