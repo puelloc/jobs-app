@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -24,6 +25,7 @@ import (
 	"jobsapp/internal/db"
 	"jobsapp/internal/exitcode"
 	"jobsapp/internal/jobposting"
+	"jobsapp/internal/logging"
 	"jobsapp/internal/robots"
 	"jobsapp/internal/store"
 )
@@ -142,6 +144,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_ = store.FinishRun(ctx, database, runID, status, found, inserted, updated, strPtr(errText))
 	}
 
+	// The structured log carries this run's correlation on every line: the trace inherited from the
+	// sweep (or a fresh one when run by hand), the sweep and run ids, and the company. That is what
+	// makes a company's lines attributable even though its own log file is empty during a sweep,
+	// because the child inherits the batch's stdout.
+	logger := logging.New(
+		logging.Config{
+			App:     logging.App(),
+			Service: logging.Service("scrape"),
+			Level:   os.Getenv(logging.EnvLevel),
+			Writer:  stderr,
+		},
+		logging.IdentityFromEnv().With(&runID, company.Slug),
+	)
+	// The Python children inherit the correlation, so anything they log joins the same trace.
+	childEnv := append(os.Environ(), logger.Identity().Env()...)
+	logger.Info("start",
+		slog.String("vendor", *vendor),
+		slog.String("career_site_url", company.CareerSiteURL),
+		slog.String("data_dir", cfg.DataDir),
+	)
+
 	trace := fmt.Sprintf("%s/traces/%d.jsonl", cfg.DataDir, runID)
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
 	// A reachability probe wants a shorter budget than the whole-scrape HTTP timeout: three retries
@@ -219,18 +242,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return exitcode.OllamaUnreachable
 		}
 
-		probeOut, err := exec.CommandContext(ctx, python, "worker/remote_roles_probe.py",
+		probeCmd := exec.CommandContext(ctx, python, "worker/remote_roles_probe.py",
 			"--url", company.CareerSiteURL,
 			"--company", company.Name,
 			"--host", cfg.OllamaHost,
 			"--model", cfg.BrowserUseModel,
 			"--max-steps", fmt.Sprintf("%d", *maxSteps),
 			"--trace", trace,
-		).Output()
+		)
+		probeCmd.Env = childEnv
+		probeOut, err := probeCmd.Output()
 		if err != nil {
 			// The worker process failed. Re-check the host: if Ollama is down now, that is the cause
 			// and the batch runner should stop; otherwise it is an ordinary agent failure.
 			fmt.Fprintf(stderr, "scrape: agent: %v\n", err)
+			logger.Error("agent failed", slog.String("error", err.Error()), slog.Bool("timeout", ctx.Err() != nil))
 			return classifyAgentFailure(fmt.Sprintf("agent: %v", err))
 		}
 		var probe probeOutput
@@ -248,6 +274,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			}
 			fmt.Fprintf(stdout, "run_id=%d company=%s agent_failed=1 error=%q timeout=%t\n",
 				runID, company.Slug, probe.Error, probe.Timeout)
+			logger.Error("agent failed",
+				slog.String("error", probe.Error),
+				slog.Bool("timeout", probe.Timeout),
+				slog.String("span", "agent"),
+			)
 			return classifyAgentFailure(errText)
 		}
 		if probe.Answer == nil || probe.Answer.ListingsURL == "" {
@@ -258,6 +289,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			}
 			fmt.Fprintf(stdout, "run_id=%d company=%s listings=none found=0 evidence=%q\n",
 				runID, company.Slug, evidence)
+			logger.Info("skip",
+				slog.String("reason", "listings_none"),
+				slog.String("span", "agent"),
+				slog.String("evidence", evidence),
+			)
 			return 0
 		}
 
@@ -268,6 +304,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 		listingsURL = probe.Answer.ListingsURL
 		remoteConfirmed = probe.Answer.HasRemoteSoftwareRoles
+		logger.Info("agent decided",
+			slog.String("span", "agent"),
+			slog.String("listings_url", listingsURL),
+			slog.Bool("remote_confirmed", remoteConfirmed),
+			slog.Int("role_count", probe.Answer.RemoteSoftwareRoleCount),
+			slog.String("evidence", probe.Answer.Evidence),
+		)
 
 		// Cache the URL and the verdict together, whatever the verdict was. Caching only the positive
 		// one - as this did before - left the majority of companies (the ones with nothing open)
@@ -287,6 +330,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		finish("ok", 0, 0, 0, "")
 		fmt.Fprintf(stdout, "run_id=%d company=%s no_remote_roles=true source=%s url=%s\n",
 			runID, company.Slug, resolvedFrom, listingsURL)
+		logger.Info("skip",
+			slog.String("reason", "no_remote_roles"),
+			slog.String("resolution", resolvedFrom),
+			slog.String("listings_url", listingsURL),
+		)
 		return 0
 	}
 
@@ -318,7 +366,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if crawlDelay > 0 {
 		fetchArgs = append(fetchArgs, "--crawl-delay", fmt.Sprintf("%.2f", crawlDelay.Seconds()))
 	}
-	fetchOut, err := exec.CommandContext(ctx, python, fetchArgs...).Output()
+	fetchCmd := exec.CommandContext(ctx, python, fetchArgs...)
+	fetchCmd.Env = childEnv
+	fetchOut, err := fetchCmd.Output()
 	if err != nil {
 		finish("error", 0, 0, 0, fmt.Sprintf("fetch: %v", err))
 		fmt.Fprintf(stderr, "scrape: fetch: %v\n", err)
@@ -333,6 +383,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Diagnose a zero: how many links were on the rendered page vs how many the heuristic kept.
 	fmt.Fprintf(stdout, "run_id=%d company=%s fetch: page_links=%d extracted=%d\n",
 		runID, company.Slug, fetched.TotalLinks, len(fetched.Jobs))
+	logger.Info("fetch",
+		slog.String("span", "fetch"),
+		slog.String("listings_url", listingsURL),
+		slog.Int("page_links", fetched.TotalLinks),
+		slog.Int("extracted", len(fetched.Jobs)),
+		slog.Float64("crawl_delay_s", crawlDelay.Seconds()),
+	)
 
 	extPattern := externalIDPattern(*vendor)
 
@@ -429,6 +486,33 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	finish("ok", int64(inserted+refreshed+skipped), int64(inserted), int64(refreshed), "")
+	logger.Info("store",
+		slog.String("span", "store"),
+		slog.Int("found", len(fetched.Jobs)),
+		slog.Int("inserted", inserted),
+		slog.Int("refreshed", refreshed),
+		slog.Int("skipped_non_us", skipped),
+		slog.Int("remote_evidence", remoteEvidence),
+	)
+	logger.Info("stale",
+		slog.String("span", "stale"),
+		slog.Int64("closed", closed),
+		slog.String("note", staleNote),
+	)
+	// The report line, mirrored as one structured event so a whole sweep can be summarised from the log
+	// store alone - without reading per-run files, which are empty during a sweep.
+	logger.Info("summary",
+		slog.String("span", "summary"),
+		slog.String("resolution", resolvedFrom),
+		slog.String("listings_url", listingsURL),
+		slog.Int("found", len(fetched.Jobs)),
+		slog.Int("inserted", inserted),
+		slog.Int("refreshed", refreshed),
+		slog.Int("skipped_non_us", skipped),
+		slog.Int64("closed", closed),
+		slog.Int("remote_evidence", remoteEvidence),
+		slog.String("stale_note", staleNote),
+	)
 	fmt.Fprintf(stdout, "run_id=%d company=%s listings=%s resolution=%s found=%d inserted=%d refreshed=%d skipped=%d closed=%d remote_evidence=%d",
 		runID, company.Slug, listingsURL, resolvedFrom, len(fetched.Jobs), inserted, refreshed, skipped, closed, remoteEvidence)
 	if staleNote != "" {

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +24,7 @@ import (
 	"jobsapp/internal/api"
 	"jobsapp/internal/config"
 	"jobsapp/internal/db"
+	"jobsapp/internal/logging"
 	"jobsapp/internal/store"
 )
 
@@ -84,9 +86,23 @@ func run() int {
 
 	scrapeCmd := strings.Fields(cfg.ScrapeCommand)
 
+	// Request logging lives here rather than inside NewRouter: it is a process-level concern, and
+	// wrapping the router keeps the constructor's signature (and every test that calls it) unchanged.
+	// Every request gets a trace id, which the jobs it triggers inherit.
+	logger := logging.New(
+		logging.Config{
+			App:     logging.App(),
+			Service: logging.Service("server"),
+			Level:   os.Getenv(logging.EnvLevel),
+			Writer:  os.Stderr,
+		},
+		logging.IdentityFromEnv(),
+	)
+	logger.Info("server starting", slog.String("addr", cfg.ServerAddr), slog.String("data_dir", cfg.DataDir))
+
 	srv := &http.Server{
 		Addr:              cfg.ServerAddr,
-		Handler:           api.NewRouter(database, cfg.DataDir, scrapeCmd),
+		Handler:           logging.Middleware(logger, api.NewRouter(database, cfg.DataDir, scrapeCmd)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

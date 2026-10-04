@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"jobsapp/internal/logging"
 	"jobsapp/internal/store"
 )
 
@@ -103,6 +104,9 @@ func handleTriggerJob(db *sql.DB, dataDir string, runner *jobRunner) http.Handle
 			cmd := exec.Command(spec.bin, jobArgs...)
 			cmd.Stdout = logf
 			cmd.Stderr = logf
+			// The child inherits this request's trace, so everything the triggered job logs joins the
+			// request that started it instead of arriving as an unrelated stream.
+			cmd.Env = append(os.Environ(), logging.FromContext(r.Context()).Env()...)
 			// Own process group so a stop signals the job plus its descendants.
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			if err := cmd.Start(); err != nil {
@@ -149,9 +153,16 @@ func handleTriggerJob(db *sql.DB, dataDir string, runner *jobRunner) http.Handle
 			return
 		}
 
+		// The sweep's own run id goes with it so its structured logs can carry sweep_id and join this
+		// row. Only batch takes the flag; classify creates no per-company work to attribute.
+		if name == "batch" {
+			jobArgs = append(jobArgs, "-run-id", strconv.FormatInt(runID, 10))
+		}
+
 		cmd := exec.Command(spec.bin, jobArgs...)
 		cmd.Stdout = logf
 		cmd.Stderr = logf
+		cmd.Env = append(os.Environ(), logging.FromContext(r.Context()).Env()...)
 		// Own process group so a stop signals the job plus its descendants.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {

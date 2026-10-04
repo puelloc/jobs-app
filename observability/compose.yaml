@@ -1,0 +1,84 @@
+# The observability stack: Loki (store) + Alloy (collector) + Grafana (query UI).
+#
+# Separate from every application's compose on purpose. Alloy reads the Docker socket, so it collects
+# from *every* container on this host with no shared network and no changes to the apps - which means
+# there is nothing to gain by merging this into jobs-app's compose, and a shared file to break every
+# time one app changes.
+#
+#   cd observability && docker compose up -d
+#
+# Image tags are pinned deliberately (an unpinned observability stack that silently upgrades under you
+# is its own outage); bump them when you have a reason to.
+name: observability
+
+services:
+  loki:
+    image: grafana/loki:3.4.2
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    ports:
+      # Exposed so the logs MCP server (which may run on another machine) can query it. Loki has no
+      # authentication of its own: keep this on the LAN, or put it behind the existing reverse proxy
+      # with auth, and never publish it straight to the internet.
+      - "3100:3100"
+    restart: unless-stopped
+    healthcheck:
+      # Loki's own readiness endpoint, through the busybox wget the image already carries. The obvious
+      # `loki -help` exits 2, which reports a perfectly healthy Loki as unhealthy.
+      test: ["CMD", "/busybox/wget", "-q", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  alloy:
+    image: grafana/alloy:v1.8.2
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      # The socket is the whole mechanism: read-only, and it is what makes every other container a
+      # collection source without being touched.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      # Override in .env. The default is only acceptable because this listens on the LAN.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-changeme}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      # Provisioned so Grafana comes up with Loki already wired and a starter dashboard, rather than
+      # needing ten minutes of clicking before the first query.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - loki
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  loki-data:
+  alloy-data:
+  grafana-data:

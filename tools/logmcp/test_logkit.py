@@ -1,0 +1,351 @@
+"""Tests for the log query engine.
+
+Most of the suite runs against a canned Loki, so it needs no store and no network. One class at the end
+runs against a real Loki when one is reachable (LOKI_URL, or localhost:3100) and skips itself
+otherwise, which is how the LogQL these tools build gets checked against a real parser rather than
+against this file's assumptions.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import unittest
+import urllib.error
+from datetime import timedelta
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from logkit import LogKit, LogKitError, Loki, parsed_line, parse_window, streams_to_lines  # noqa: E402
+
+
+def _ns(seconds_ago: float) -> str:
+    import time
+
+    return str(int((time.time() - seconds_ago) * 1_000_000_000))
+
+
+def stream_body(entries: list[tuple[str, dict, str]]) -> dict:
+    """A Loki query_range response from (timestamp, labels, line) tuples."""
+    streams: dict[str, dict] = {}
+    for ts, labels, line in entries:
+        key = json.dumps(labels, sort_keys=True)
+        streams.setdefault(key, {"stream": labels, "values": []})
+        streams[key]["values"].append([ts, line])
+    return {"status": "success", "data": {"resultType": "streams", "result": list(streams.values())}}
+
+
+class FakeLoki(Loki):
+    """A Loki whose HTTP layer is canned, so the real parsing and query building stay in the path."""
+
+    def __init__(self, ranges: dict | None = None, instants: dict | None = None,
+                 labels: list[str] | None = None, values: dict | None = None) -> None:
+        super().__init__(url="http://fake.loki")
+        self.ranges = ranges or {}
+        self.instants = instants or {}
+        self._labels = labels or []
+        self._values = values or {}
+        self.queries: list[tuple[str, dict]] = []
+
+    def _get(self, path: str, params: dict) -> dict:
+        self.queries.append((path, params))
+        if path == "/loki/api/v1/labels":
+            return {"status": "success", "data": self._labels}
+        if path.startswith("/loki/api/v1/label/"):
+            name = path.rsplit("/", 2)[1]
+            return {"status": "success", "data": self._values.get(name, [])}
+        if path == "/loki/api/v1/query":
+            return self.instants.get(params["query"], {"status": "success", "data": {"result": []}})
+        if path == "/loki/api/v1/query_range":
+            return self.ranges.get(params["query"], {"status": "success", "data": {"result": []}})
+        raise LogKitError(f"unexpected path {path}")
+
+
+class TestParseWindow(unittest.TestCase):
+    def test_durations(self) -> None:
+        self.assertEqual(parse_window("30m"), timedelta(minutes=30))
+        self.assertEqual(parse_window("2h"), timedelta(hours=2))
+        self.assertEqual(parse_window("7d"), timedelta(days=7))
+        self.assertEqual(parse_window("1w"), timedelta(weeks=1))
+        self.assertEqual(parse_window(None), timedelta(hours=24))
+        self.assertEqual(parse_window(None, "1h"), timedelta(hours=1))
+
+    def test_iso_instant_means_since_then(self) -> None:
+        span = parse_window("2020-01-01T00:00:00Z")
+        self.assertGreater(span, timedelta(days=365))
+
+    def test_a_future_instant_does_not_produce_a_negative_window(self) -> None:
+        self.assertGreater(parse_window("2999-01-01T00:00:00Z"), timedelta(0))
+
+    def test_rejects_nonsense(self) -> None:
+        for bad in ("soon", "5 parsecs", "12", "-3h"):
+            with self.assertRaises(LogKitError):
+                parse_window(bad)
+
+
+class TestStreamsToLines(unittest.TestCase):
+    def test_flattens_sorts_and_limits(self) -> None:
+        body = stream_body([
+            (_ns(60), {"app": "b"}, "second"),
+            (_ns(120), {"app": "a"}, "first"),
+            (_ns(1), {"app": "c"}, "third"),
+        ])
+        lines = streams_to_lines(body, limit=10)
+        self.assertEqual([entry["line"] for entry in lines], ["first", "second", "third"])
+        self.assertEqual(lines[0]["labels"]["app"], "a")
+        self.assertEqual(len(streams_to_lines(body, limit=2)), 2)
+
+    def test_ignores_malformed_values(self) -> None:
+        body = {"data": {"result": [
+            {"stream": {"app": "a"}, "values": [["not-a-number", "x"], ["1", "y"], []]},
+        ]}}
+        self.assertEqual([entry["line"] for entry in streams_to_lines(body)], ["y"])
+
+    def test_empty_result(self) -> None:
+        self.assertEqual(streams_to_lines({"data": {"result": []}}), [])
+
+
+class TestParsedLine(unittest.TestCase):
+    def test_structured_line_is_parsed(self) -> None:
+        entry = {
+            "ts_ns": 1_700_000_000_000_000_000,
+            "labels": {"container": "jobs-app-1"},
+            "line": json.dumps({
+                "ts": "2026-10-04T00:00:00.000Z", "level": "error", "app": "jobs-app",
+                "svc": "scrape", "msg": "agent failed", "trace_id": "a" * 32,
+                "run_id": 615, "company": "acme", "timeout": True, "custom": "kept",
+            }),
+        }
+        got = parsed_line(entry)
+        self.assertEqual(got["level"], "error")
+        self.assertEqual(got["msg"], "agent failed")
+        self.assertEqual(got["company"], "acme")
+        self.assertEqual(got["container"], "jobs-app-1")
+        # A field the engine does not know about is preserved rather than dropped.
+        self.assertEqual(got["fields"]["custom"], "kept")
+        self.assertNotIn("ts", got.get("fields", {}), "the line's own ts must not be duplicated")
+
+    def test_non_json_line_is_kept_as_raw(self) -> None:
+        got = parsed_line({"ts_ns": 1, "labels": {}, "line": "Traceback (most recent call last):"})
+        self.assertIn("Traceback", got["raw"])
+        self.assertNotIn("level", got)
+
+    def test_json_that_is_not_an_object_is_raw(self) -> None:
+        got = parsed_line({"ts_ns": 1, "labels": {}, "line": "[1, 2, 3]"})
+        self.assertEqual(got["raw"], "[1, 2, 3]")
+
+    def test_empty_values_are_omitted(self) -> None:
+        got = parsed_line({"ts_ns": 1, "labels": {}, "line": json.dumps({"msg": "x", "run_id": 0, "company": ""})})
+        self.assertNotIn("company", got)
+        self.assertNotIn("run_id", got, "a zero id is omitted rather than reported as real")
+
+
+class TestTraceTimeline(unittest.TestCase):
+    def test_builds_a_timeline_across_services(self) -> None:
+        trace = "b" * 32
+        query = f'{{app=~".+"}} | json | trace_id="{trace}"'
+        body = stream_body([
+            (_ns(30), {"app": "jobs-app", "svc": "batch"},
+             json.dumps({"level": "info", "app": "jobs-app", "svc": "batch", "msg": "sweep started",
+                         "trace_id": trace, "sweep_id": 457})),
+            (_ns(20), {"app": "jobs-app", "svc": "scrape"},
+             json.dumps({"level": "info", "app": "jobs-app", "svc": "scrape", "msg": "start", "span": "start",
+                         "trace_id": trace, "run_id": 615, "company": "acme"})),
+            (_ns(5), {"app": "jobs-app", "svc": "scrape"},
+             json.dumps({"level": "error", "app": "jobs-app", "svc": "scrape", "msg": "agent failed",
+                         "span": "agent", "trace_id": trace, "run_id": 615, "company": "acme"})),
+        ])
+        kit = LogKit(FakeLoki(ranges={query: body}))
+        got = kit.trace_timeline(trace)
+
+        self.assertEqual(got["lines"], 3)
+        self.assertEqual(got["errors"], 1)
+        self.assertEqual([line["msg"] for line in got["timeline"]],
+                         ["sweep started", "start", "agent failed"])
+        self.assertEqual(got["spans"], {"-": 1, "start": 1, "agent": 1})
+        self.assertEqual(got["timeline"][-1]["company"], "acme")
+
+    def test_rejects_a_malformed_trace_id(self) -> None:
+        kit = LogKit(FakeLoki())
+        for bad in ("", "abc", "Z" * 32, "a" * 31, "a" * 33):
+            with self.assertRaises(LogKitError):
+                kit.trace_timeline(bad)
+
+    def test_normalises_case(self) -> None:
+        trace = "c" * 32
+        fake = FakeLoki(ranges={f'{{app=~".+"}} | json | trace_id="{trace}"': stream_body([])})
+        LogKit(fake).trace_timeline(trace.upper())
+        self.assertIn(trace, fake.queries[0][1]["query"])
+
+
+class TestErrorSummary(unittest.TestCase):
+    def test_groups_and_sorts_counts(self) -> None:
+        query = "sum by (app, svc, msg) (count_over_time({level=~\"error\"} | json [86400s]))"
+        body = {"status": "success", "data": {"result": [
+            {"metric": {"app": "jobs-app", "svc": "scrape", "msg": "agent failed"}, "value": [1, "16"]},
+            {"metric": {"app": "apply-app", "svc": "worker", "msg": "postcondition_failed"}, "value": [1, "3"]},
+        ]}}
+        kit = LogKit(FakeLoki(instants={query: body}))
+        got = kit.error_summary("24h")
+
+        self.assertEqual(got["total"], 19)
+        self.assertEqual(got["groups"], 2)
+        self.assertEqual(got["errors"][0]["count"], 16)
+        self.assertEqual(got["errors"][0]["msg"], "agent failed")
+        self.assertEqual(got["errors"][1]["app"], "apply-app")
+
+    def test_window_becomes_seconds_in_the_query(self) -> None:
+        fake = FakeLoki()
+        LogKit(fake).error_summary("2h")
+        self.assertIn("[7200s]", fake.queries[0][1]["query"])
+
+    def test_app_filter_narrows_the_selector(self) -> None:
+        fake = FakeLoki()
+        LogKit(fake).error_summary("1h", level="error|warn", app="apply-app")
+        self.assertIn('level=~"error|warn"', fake.queries[0][1]["query"])
+        self.assertIn('app="apply-app"', fake.queries[0][1]["query"])
+
+    def test_an_unparsed_message_is_labelled(self) -> None:
+        query = "sum by (app, svc, msg) (count_over_time({level=~\"error\"} | json [3600s]))"
+        body = {"status": "success", "data": {"result": [
+            {"metric": {"app": "x"}, "value": [1, "2"]},
+        ]}}
+        got = LogKit(FakeLoki(instants={query: body})).error_summary("1h")
+        self.assertEqual(got["errors"][0]["msg"], "(unparsed)")
+
+
+class TestContainerHealth(unittest.TestCase):
+    def test_ranks_by_problem_density_not_volume(self) -> None:
+        total = 'sum by (container) (count_over_time({container=~".+"} [86400s]))'
+        problems = ('sum by (container) (count_over_time({container=~".+"} |~ '
+                    '"(?i)panic|fatal|oomkill|out of memory|traceback|exit status|unhandled" [86400s]))')
+        kit = LogKit(FakeLoki(instants={
+            total: {"data": {"result": [
+                {"metric": {"container": "noisy"}, "value": [1, "100000"]},
+                {"metric": {"container": "broken"}, "value": [1, "100"]},
+            ]}},
+            problems: {"data": {"result": [
+                {"metric": {"container": "noisy"}, "value": [1, "1"]},
+                {"metric": {"container": "broken"}, "value": [1, "50"]},
+            ]}},
+        }))
+        got = kit.container_health("24h")
+
+        self.assertEqual(got["containers"][0]["container"], "broken", "density beats volume")
+        self.assertEqual(got["containers"][0]["problem_per_1k"], 500.0)
+        self.assertEqual(got["containers"][1]["problem_per_1k"], 0.0)
+
+    def test_a_container_with_no_problems_reports_zero(self) -> None:
+        total = 'sum by (container) (count_over_time({container=~".+"} [3600s]))'
+        kit = LogKit(FakeLoki(instants={total: {"data": {"result": [
+            {"metric": {"container": "quiet"}, "value": [1, "10"]},
+        ]}}}))
+        got = kit.container_health("1h")
+        self.assertEqual(got["containers"][0]["problem_lines"], 0)
+
+
+class TestStatus(unittest.TestCase):
+    def test_reports_labels_and_values(self) -> None:
+        kit = LogKit(FakeLoki(labels=["app", "svc", "level", "container"],
+                              values={"app": ["jobs-app", "apply-app"], "svc": ["scrape"], "level": ["info"]}))
+        got = kit.status("24h")
+        self.assertIn("container", got["labels"])
+        self.assertEqual(got["label_values"]["app"], ["apply-app", "jobs-app"], "values come back sorted")
+
+    def test_a_failing_store_is_reported_not_raised_blindly(self) -> None:
+        class Broken(Loki):
+            def _get(self, path: str, params: dict) -> dict:
+                raise LogKitError("connection refused")
+
+        with self.assertRaises(LogKitError):
+            LogKit(Broken()).status()
+
+
+class TestSearchLogs(unittest.TestCase):
+    def test_passes_the_query_through_and_parses_the_result(self) -> None:
+        query = '{app="jobs-app"} | json | company="cisco"'
+        body = stream_body([
+            (_ns(10), {"app": "jobs-app"}, json.dumps({"level": "info", "msg": "summary", "company": "cisco"})),
+        ])
+        kit = LogKit(FakeLoki(ranges={query: body}))
+        got = kit.search_logs(query, window="24h")
+        self.assertEqual(got["returned"], 1)
+        self.assertEqual(got["lines"][0]["company"], "cisco")
+
+
+def live_loki_available() -> bool:
+    """Whether a real Loki is reachable, so the integration class can skip instead of fail."""
+    import urllib.request
+
+    url = os.environ.get("LOKI_URL", "http://127.0.0.1:3100") + "/ready"
+    try:
+        with urllib.request.urlopen(url, timeout=3) as response:
+            return response.status == 200
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
+@unittest.skipUnless(os.environ.get("LOKI_URL_TEST") or live_loki_available(), "no Loki reachable")
+class TestAgainstRealLoki(unittest.TestCase):
+    """The LogQL these tools build, checked against a real Loki: a fake proves the code does what this
+    file assumes, and only a real store proves the assumption was right."""
+
+    def test_status_query_parses(self) -> None:
+        got = LogKit().status("1h")
+        self.assertIn("labels", got)
+
+    def test_error_summary_query_parses(self) -> None:
+        # The aggregation is the risky part of the generated LogQL: Loki rejects an unknown grouping
+        # label outright, so this fails loudly if the shape is wrong.
+        got = LogKit().error_summary("1h")
+        self.assertIn("total", got)
+
+    def test_container_health_query_parses(self) -> None:
+        got = LogKit().container_health("1h")
+        self.assertIn("containers", got)
+
+    def test_trace_timeline_round_trips_through_the_store(self) -> None:
+        """Push one trace across two services and read it back in order.
+
+        This verifies the correlation design end to end. The fakes in the rest of the suite prove the
+        parsing is right; only a real store proves the query - `| json | trace_id="..."` against
+        structured metadata - is one Loki actually accepts.
+        """
+        import random
+        import time
+        import urllib.request
+
+        trace = "%032x" % random.getrandbits(128)
+        now = int(time.time() * 1e9)
+        streams = []
+        entries = [
+            ("jobs-app", "server", "info", "request"),
+            ("jobs-app", "scrape", "error", "agent failed"),
+        ]
+        for offset, (app, svc, level, msg) in enumerate(entries):
+            body = json.dumps({"level": level, "msg": msg, "app": app, "svc": svc, "trace_id": trace})
+            streams.append({
+                # Timestamps must be in the past: Loki drops entries too far in the future, silently,
+                # which is exactly the trap this test was written after falling into.
+                "stream": {"app": app, "svc": svc, "level": level, "container": f"{app}-test"},
+                "values": [[str(now - (10 - offset * 5) * 10**9), body, {"trace_id": trace}]],
+            })
+        request = urllib.request.Request(
+            os.environ.get("LOKI_URL", "http://127.0.0.1:3100") + "/loki/api/v1/push",
+            data=json.dumps({"streams": streams}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            self.assertIn(response.status, (200, 204))
+
+        time.sleep(2)  # let the ingester make it queryable
+        got = LogKit().trace_timeline(trace, window="5m")
+        self.assertEqual(got["lines"], 2, got)
+        self.assertEqual([line["msg"] for line in got["timeline"]], ["request", "agent failed"])
+        self.assertEqual([line["svc"] for line in got["timeline"]], ["server", "scrape"])
+        self.assertEqual(got["errors"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"jobsapp/internal/logging"
 	"jobsapp/internal/store"
 )
 
@@ -100,6 +101,9 @@ func handleScrapeCompany(db *sql.DB, dataDir string, scrapeCmd []string, runner 
 		cmd := exec.Command(scrapeCmd[0], args...)
 		cmd.Stdout = logf
 		cmd.Stderr = logf
+		// The scrape inherits the trace of the request that triggered it, so this company's logs and
+		// the click that started them are one query.
+		cmd.Env = append(os.Environ(), logging.FromContext(r.Context()).Env()...)
 		// Own process group so a stop signals the scrape plus its Python/Chromium descendants.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {

@@ -1,0 +1,19 @@
+# Grafana datasource provisioning: Loki, already wired on first boot.
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: true
+    jsonData:
+      maxLines: 5000
+      # Loki 3 stores high-cardinality correlation values as structured metadata rather than index
+      # labels. Grafana surfaces them as detected fields, which is what makes clicking through from a
+      # line to "everything with this trace_id" work.
+      derivedFields:
+        - name: trace_id
+          matcherRegex: '"trace_id":"([0-9a-f]{32})"'
+          url: '${__value.raw}'
+          datasourceUid: loki

@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"jobsapp/internal/config"
 	"jobsapp/internal/db"
 	"jobsapp/internal/exitcode"
+	"jobsapp/internal/logging"
 	"jobsapp/internal/store"
 )
 
@@ -38,6 +40,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	skipTraced := fs.Bool("skip-traced", false, "skip companies whose latest scrape run left a non-empty browser-use trace")
 	delay := fs.Duration("delay", 5*time.Second, "pause between companies")
 	scrapeCmd := fs.String("scrape-cmd", "", "command to run per company (default: config SCRAPE_COMMAND)")
+	sweepRunID := fs.Int64("run-id", 0,
+		"scrape_runs id of this sweep (0 = unknown); recorded on every log line as sweep_id so the sweep's logs join its database row")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -80,6 +84,32 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	// One trace for the whole sweep, inherited from whoever launched us (the server passes the id of
+	// the scrape_runs row it opened) or generated here for a hand-run sweep. Every company's child
+	// process inherits it, so "everything that happened during this sweep" is one query even though
+	// the children write their own logs.
+	sweepIdentity := logging.IdentityFromEnv()
+	if *sweepRunID != 0 {
+		sweepIdentity.SweepID = sweepRunID
+	}
+	logger := logging.New(
+		logging.Config{
+			App:     logging.App(),
+			Service: logging.Service("batch"),
+			Level:   os.Getenv(logging.EnvLevel),
+			Writer:  stderr,
+		},
+		sweepIdentity,
+	)
+	childEnv := append(os.Environ(), logger.Identity().Env()...)
+	logger.Info("sweep started",
+		slog.Int("companies", len(targets)),
+		slog.Bool("skip_ok", *skipOK),
+		slog.Bool("skip_traced", *skipTraced),
+		slog.String("from_slug", *fromSlug),
+		slog.Int("stop_after_failures", *stopAfter),
+	)
+
 	fmt.Fprintf(stdout, "batch: %d companies, sequential (skip-ok=%t skip-traced=%t)\n",
 		len(targets), *skipOK, *skipTraced)
 	ok, failed, skipped, consecutive := 0, 0, 0, 0
@@ -88,6 +118,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if reason := shouldSkip(t, *skipOK, *skipTraced, cfg.DataDir); reason != "" {
 			skipped++
 			fmt.Fprintf(stdout, "[%d/%d] company=%s skip (%s)\n", i+1, len(targets), t.Slug, reason)
+			logger.Info("company skipped",
+				slog.Int("index", i+1), slog.Int("of", len(targets)),
+				slog.String("company", t.Slug), slog.String("reason", reason),
+			)
 			continue
 		}
 		if i > 0 && *delay > 0 {
@@ -97,13 +131,29 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// mid-company, the file already names the company a resume should start from.
 		writeResumePoint(cfg.DataDir, t.Slug)
 		fmt.Fprintf(stdout, "[%d/%d] company=%s vendor=%s\n", i+1, len(targets), t.Slug, t.Vendor)
+		logger.Info("company started",
+			slog.Int("index", i+1), slog.Int("of", len(targets)),
+			slog.String("company", t.Slug), slog.String("vendor", t.Vendor),
+		)
 
 		argv := append([]string{}, cmdWords[1:]...)
 		argv = append(argv, "--slug", t.Slug, "--vendor", t.Vendor)
 		cmd := exec.CommandContext(ctx, cmdWords[0], argv...)
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
+		// The child inherits the sweep's trace, so its lines join this sweep rather than arriving as an
+		// unrelated stream.
+		cmd.Env = childEnv
+		// The per-company duration is the number an optimisation question turns on, and it is not
+		// recoverable afterwards from the child's own log (which is empty: it shares our stdout).
+		companyStarted := time.Now()
 		if err := cmd.Run(); err != nil {
+			logger.Error("company failed",
+				slog.String("company", t.Slug),
+				slog.Int("index", i+1),
+				slog.Int64("duration_ms", time.Since(companyStarted).Milliseconds()),
+				slog.String("error", err.Error()),
+			)
 			fmt.Fprintf(stderr, "batch: company=%s failed: %v\n", t.Slug, err)
 			failed++
 			consecutive++
@@ -125,6 +175,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		ok++
 		consecutive = 0
+		logger.Info("company finished",
+			slog.String("company", t.Slug),
+			slog.Int("index", i+1),
+			slog.Int64("duration_ms", time.Since(companyStarted).Milliseconds()),
+		)
 	}
 
 	// A sweep that ran every company to the end has nothing to resume: clear the resume point so the
@@ -133,6 +188,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		clearResumePoint(cfg.DataDir)
 	}
 
+	logger.Info("sweep finished",
+		slog.Int("ok", ok),
+		slog.Int("failed", failed),
+		slog.Int("skipped", skipped),
+		slog.Int("total", len(targets)),
+		slog.Bool("stopped_early", stoppedEarly),
+	)
 	fmt.Fprintf(stdout, "batch done: ok=%d failed=%d skipped=%d total=%d\n", ok, failed, skipped, len(targets))
 	return 0
 }

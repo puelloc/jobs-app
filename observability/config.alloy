@@ -1,0 +1,108 @@
+// Grafana Alloy: one collector for every container on this host.
+//
+// It reads the Docker socket rather than each container's files, which is why nothing in jobs-app,
+// apply-app or apply-console has to be reconfigured, networked together, or even aware that it is
+// being collected: a new container is discovered and tailed from its very first line.
+//
+// The two things worth understanding here:
+//
+//  1. discovery + relabel decide the *labels* (the index). They are kept few and low-cardinality.
+//  2. loki.process parses the JSON the apps emit so trace_id / run_id / company become queryable
+//     fields without being promoted to labels - high-cardinality labels are what turn a cheap log
+//     store into an expensive one.
+
+logging {
+  level  = "warn"
+  format = "logfmt"
+}
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Docker reports the name with a leading slash.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  // Compose service and project, so a query can say "everything in the jobs-app project".
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+
+  // stdout and stderr are separate streams in Docker; keeping the distinction makes it obvious which
+  // lines are the apps' structured telemetry (stderr) and which are their human reports (stdout).
+  rule {
+    source_labels = ["__meta_docker_container_log_stream"]
+    target_label  = "stream"
+  }
+}
+
+loki.source.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.relabel.containers.output
+  forward_to       = [loki.process.apps.receiver]
+  refresh_interval = "5s"
+  // Read positions live under --storage.path, so a restart resumes where it stopped instead of
+  // replaying every container's history into the store - which is how a log store quietly doubles.
+}
+
+loki.process "apps" {
+  forward_to = [loki.write.local.receiver]
+
+  // jobs-app, apply-app and apply-console all emit one JSON object per line on stderr - see
+  // internal/logging in jobs-app. Non-JSON lines (the human reports on stdout, Docker's own noise)
+  // pass through unparsed rather than being dropped.
+  stage.json {
+    expressions = {
+      level    = "level",
+      app      = "app",
+      svc      = "svc",
+      msg      = "msg",
+      trace_id = "trace_id",
+      span     = "span",
+      company  = "company",
+      run_id   = "run_id",
+      sweep_id = "sweep_id",
+    }
+  }
+
+  // Low cardinality, high value: these become index labels, so `{level="error"}` is cheap.
+  stage.labels {
+    values = {
+      level = "",
+      app   = "",
+      svc   = "",
+    }
+  }
+
+  // High cardinality, still queryable: structured metadata is stored alongside the line instead of in
+  // the index. This is what keeps `| trace_id = "..."` fast without creating a stream per trace.
+  stage.structured_metadata {
+    values = {
+      trace_id = "",
+      run_id   = "",
+      sweep_id = "",
+      company  = "",
+    }
+  }
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+  external_labels = {
+    host = "nas",
+  }
+}
