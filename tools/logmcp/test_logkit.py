@@ -62,6 +62,44 @@ class FakeLoki(Loki):
         raise LogKitError(f"unexpected path {path}")
 
 
+class TestAuthentication(unittest.TestCase):
+    """Loki has no auth of its own, so it is usually behind something that does."""
+
+    def setUp(self) -> None:
+        for name in ("LOKI_USERNAME", "LOKI_PASSWORD", "LOKI_TOKEN", "LOKI_URL"):
+            os.environ.pop(name, None)
+
+    def test_no_credentials_sends_no_authorization(self) -> None:
+        self.assertNotIn("Authorization", Loki().headers())
+
+    def test_basic_auth_for_an_access_list(self) -> None:
+        # base64("cris:s3cret"), which is what Nginx Proxy Manager's Access List expects.
+        header = Loki(username="cris", password="s3cret").headers()["Authorization"]
+        self.assertEqual(header, "Basic Y3JpczpzM2NyZXQ=")
+
+    def test_bearer_token(self) -> None:
+        header = Loki(token="abc123").headers()["Authorization"]
+        self.assertEqual(header, "Bearer abc123")
+
+    def test_a_token_wins_over_a_username(self) -> None:
+        header = Loki(username="cris", password="x", token="abc123").headers()["Authorization"]
+        self.assertEqual(header, "Bearer abc123")
+
+    def test_credentials_come_from_the_environment(self) -> None:
+        os.environ["LOKI_USERNAME"] = "cris"
+        os.environ["LOKI_PASSWORD"] = "s3cret"
+        self.assertEqual(Loki().headers()["Authorization"], "Basic Y3JpczpzM2NyZXQ=")
+
+    def test_an_explicit_argument_beats_the_environment(self) -> None:
+        os.environ["LOKI_TOKEN"] = "from-env"
+        self.assertEqual(Loki(token="explicit").headers()["Authorization"], "Bearer explicit")
+
+    def test_a_password_is_not_required_with_a_username(self) -> None:
+        # An empty password is a legitimate basic-auth credential; raising here would be a worse
+        # failure than sending it and being told 401.
+        self.assertTrue(Loki(username="cris").headers()["Authorization"].startswith("Basic "))
+
+
 class TestParseWindow(unittest.TestCase):
     def test_durations(self) -> None:
         self.assertEqual(parse_window("30m"), timedelta(minutes=30))
@@ -331,13 +369,10 @@ class TestAgainstRealLoki(unittest.TestCase):
                 "stream": {"app": app, "svc": svc, "level": level, "container": f"{app}-test"},
                 "values": [[str(now - (10 - offset * 5) * 10**9), body, {"trace_id": trace}]],
             })
-        request = urllib.request.Request(
-            os.environ.get("LOKI_URL", "http://127.0.0.1:3100") + "/loki/api/v1/push",
-            data=json.dumps({"streams": streams}).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(request, timeout=10) as response:
-            self.assertIn(response.status, (200, 204))
+        # Pushed through the client rather than a bare urlopen, so the test exercises the same
+        # authenticated path the tools read with: against a Loki behind an Nginx Proxy Manager Access
+        # List, a test that bypassed the credentials would pass while the tools failed.
+        self.assertIn(Loki().push(streams), (200, 204))
 
         time.sleep(2)  # let the ingester make it queryable
         got = LogKit().trace_timeline(trace, window="5m")

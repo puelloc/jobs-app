@@ -117,6 +117,29 @@ is a fast request, not a missing one.
 | --- | --- | --- |
 | `LOKI_URL` | `http://127.0.0.1:3100` | The store to query |
 | `LOKI_TIMEOUT` | `30` | Per-request seconds |
+| `LOKI_USERNAME` / `LOKI_PASSWORD` | — | HTTP Basic, for an Nginx Proxy Manager Access List |
+| `LOKI_TOKEN` | — | `Authorization: Bearer …`, if the proxy expects a token instead |
+
+## Reaching a Loki behind a reverse proxy
+
+Loki has **no authentication of its own**, so anything exposing it supplies one. Both common shapes
+work: an **Nginx Proxy Manager Access List** (HTTP Basic) and a proxy expecting a bearer token. A token
+wins if both are set.
+
+```yaml
+env:
+  LOKI_URL: https://loki.example.com
+  LOKI_USERNAME: <access-list user>
+  LOKI_PASSWORD: <access-list password>
+```
+
+If the tools report `HTTP 401`, the credentials are missing or wrong. If they report a connection
+error, the URL is unreachable from where the agent runs — a different problem, and the tool says which
+by distinguishing an HTTP status from a transport failure.
+
+Note that Loki's *push* endpoint sits behind the same proxy as its query endpoint, so an Access List
+also stops anyone writing fake log lines or filling the disk. That is a good reason to add one even on
+a network you trust.
 
 ## Tests
 

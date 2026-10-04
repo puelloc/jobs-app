@@ -11,6 +11,7 @@ the last thing that should break because a language runtime moved.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -73,14 +74,54 @@ def _iso(ns: int) -> str:
 class Loki:
     """A Loki client that can be pointed at a fake in tests by overriding `_get`."""
 
-    def __init__(self, url: str | None = None, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        url: str | None = None,
+        timeout: float = 30.0,
+        username: str | None = None,
+        password: str | None = None,
+        token: str | None = None,
+    ) -> None:
         self.url = (url or os.environ.get("LOKI_URL") or DEFAULT_LOKI).rstrip("/")
         self.timeout = float(os.environ.get("LOKI_TIMEOUT", timeout))
+        # Loki has no authentication of its own, so whatever exposes it supplies one. The two common
+        # shapes are an Nginx Proxy Manager Access List (HTTP Basic) and a reverse proxy expecting a
+        # bearer token; both are supported, because a query tool that cannot authenticate against the
+        # store it is pointed at is no use.
+        self.username = username or os.environ.get("LOKI_USERNAME") or ""
+        self.password = password or os.environ.get("LOKI_PASSWORD") or ""
+        self.token = token or os.environ.get("LOKI_TOKEN") or ""
+
+    def headers(self) -> dict:
+        """Every request's headers, including credentials when they are configured."""
+        headers = {"Accept": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        elif self.username:
+            raw = f"{self.username}:{self.password}".encode()
+            headers["Authorization"] = "Basic " + base64.b64encode(raw).decode()
+        return headers
+
+    def push(self, streams: list[dict]) -> int:
+        """Write log lines. Used by the tests to prove the authenticated path works end to end."""
+        request = urllib.request.Request(
+            f"{self.url}/loki/api/v1/push",
+            data=json.dumps({"streams": streams}).encode(),
+            headers={**self.headers(), "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                return response.status
+        except urllib.error.HTTPError as exc:
+            raise LogKitError(f"/loki/api/v1/push -> HTTP {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise LogKitError(f"/loki/api/v1/push -> {exc}") from exc
 
     def _get(self, path: str, params: dict) -> dict:
         url = f"{self.url}{path}?{urllib.parse.urlencode(params)}"
+        request = urllib.request.Request(url, headers=self.headers())
         try:
-            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             detail = ""

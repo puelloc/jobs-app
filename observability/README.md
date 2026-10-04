@@ -97,8 +97,41 @@ never knew about each other.
 - **Disk**: Loki keeps 90 days (`limits_config.retention_period`). Docker's own logs are capped at
   10MB × 3 per container in this file; do the same for the application composes or the host fills up.
 - **Security**: Loki has **no authentication**. Port 3100 is published so the MCP server can reach it,
-  which is fine on the LAN and not fine on the internet — put it behind the existing reverse proxy with
-  auth if it needs to be reachable from outside.
+  which is fine on the LAN and not fine on the internet. See *Exposing Loki through Nginx Proxy
+  Manager* below if the agent runs on another machine.
+
+## Exposing Loki through Nginx Proxy Manager
+
+If the agent lives on a different machine from the NAS — or you want a hostname and TLS rather than a
+bare IP — add a proxy host exactly as you did for the apps:
+
+| NPM field | Value |
+| --- | --- |
+| Domain names | `loki.<your-domain>` |
+| Scheme | `http` |
+| Forward hostname / IP | the address NPM uses to reach this stack (the NAS's LAN IP, or `loki` if NPM shares a Docker network with it) |
+| Forward port | `3100` |
+| Websockets support | not needed |
+| **Access List** | **required — see below** |
+| SSL | request a certificate as usual |
+
+**Do add an Access List.** Loki's API is open on both sides: the query endpoint would let anyone read
+every log line you have, and the push endpoint would let them write false ones or fill the disk. Create
+an Access List (HTTP Basic), attach it to the proxy host, and give the MCP server the same credentials:
+
+```yaml
+env:
+  LOKI_URL: https://loki.<your-domain>
+  LOKI_USERNAME: <access-list user>
+  LOKI_PASSWORD: <access-list password>
+```
+
+If NPM runs in Docker and cannot reach `3100` on the host — common when it is on its own bridge
+network — either use the NAS's LAN IP as the forward hostname, or attach this stack to NPM's network so
+`http://loki:3100` resolves. The LAN IP is the simpler of the two and needs no compose change.
+
+A proxy is **optional**: if the agent runs on the same LAN, `LOKI_URL: http://<nas-ip>:3100` works with
+no proxy and no credentials. Add the proxy when you want a name, TLS, or access from outside the LAN.
 - **Alerts worth adding first** (Grafana → Alerting), each keyed on a label rather than a message:
   `sum by (app,svc) (count_over_time({level="error"}[15m])) > 0` for any error at all;
   a restart detector (`count_over_time({msg="server starting"}[1h]) > 1`), which is the failure that
