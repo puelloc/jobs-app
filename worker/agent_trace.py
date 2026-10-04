@@ -8,7 +8,13 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from typing import Any, Callable
+
+
+def _utc_now() -> str:
+    """RFC3339 UTC with milliseconds, matching the timestamps the rest of the schema stores."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 class TraceWriter:
@@ -30,6 +36,10 @@ class TraceWriter:
     def emit(self, event: dict[str, Any]) -> None:
         if self._fh is None:
             return
+        # Every event is stamped. A trace without timing says what the agent did but not where the run
+        # went, which is the first question when a 12-minute run only managed six steps. The field is
+        # additive: readers that predate it ignore it, and older traces simply carry no timing.
+        event = {**event, "ts": _utc_now()}
         try:
             self._fh.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
             self._fh.flush()

@@ -37,3 +37,7 @@ __pycache__/
 /worker/probe_*.log
 /worker/model_compare_*.json
 /worker/listings_*_test.json
+
+# trace MCP server cache (tools/tracemcp): traces and logs fetched from the live API.
+# Regenerable, and specific to whichever machine ran the analysis.
+/.tracecache/
