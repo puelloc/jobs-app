@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -48,6 +49,78 @@ type probeOutput struct {
 	Timeout bool         `json:"timeout"`
 	Error   string       `json:"error"`
 	Answer  *probeAnswer `json:"answer"`
+	// The process, not just the answer. A company can be resolved correctly by a run that took 19 steps
+	// and went somewhere it should not have, and without these the only thing recorded is that it
+	// worked - which is exactly the outcome that teaches nothing.
+	Steps      int             `json:"steps"`
+	ElapsedSec float64         `json:"elapsed_sec"`
+	Successful bool            `json:"is_successful"`
+	Judged     bool            `json:"judged"`
+	Judgement  json.RawMessage `json:"judgement"`
+}
+
+// judgementNote reduces the judge's report to a short, loggable string. It is a trajectory-consistency
+// check, not a fact check: it can flag a right answer reached by an unproven path, which is precisely
+// the signal worth keeping.
+func judgementNote(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return firstChars(string(raw), 200)
+	}
+	for _, key := range []string{"verdict", "reasoning", "failure_reason", "reason", "error"} {
+		if value, ok := fields[key]; ok {
+			if text, ok := value.(string); ok && text != "" {
+				return firstChars(text, 200)
+			}
+		}
+	}
+	return firstChars(string(raw), 200)
+}
+
+// qualityNote names the shapes that resolved without really working.
+//
+// Every one of these is a run that reports success or a clean skip while something upstream is wrong,
+// which is why they are worth a field of their own: they are invisible in the outcome and they are the
+// difference between a pipeline that works and one that merely produces no errors.
+func qualityNote(resolution string, remoteConfirmed bool, found, inserted, skippedNonUS int) string {
+	switch {
+	case resolution == "cache" && found == 0:
+		// The cached URL was reused and yielded nothing at all. Either the board is genuinely empty or
+		// the cached URL has gone stale - and the TTL is the thing to reconsider.
+		return "cached_url_yielded_nothing"
+	case remoteConfirmed && found == 0:
+		return "agent_confirmed_remote_but_fetch_found_nothing"
+	case remoteConfirmed && found > 0 && inserted == 0 && skippedNonUS > 0:
+		return "agent_confirmed_remote_but_all_postings_non_us"
+	case remoteConfirmed && found > 0 && inserted == 0 && skippedNonUS == 0:
+		return "agent_confirmed_remote_but_nothing_stored"
+	default:
+		return ""
+	}
+}
+
+// round1 trims a duration to one decimal, which is all the precision a log line needs.
+func round1(v float64) float64 { return math.Round(v*10) / 10 }
+
+// orSeconds prefers the worker's own measurement of its phase, falling back to the wall clock the
+// parent saw. The worker's number excludes process startup and is the more honest one.
+func orSeconds(reported float64, started time.Time) float64 {
+	if reported > 0 {
+		return reported
+	}
+	return time.Since(started).Seconds()
+}
+
+// firstChars bounds a free-text field so one verbose worker cannot dominate the log line.
+func firstChars(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "..."
 }
 
 type fetchJob struct {
@@ -65,6 +138,7 @@ type fetchJob struct {
 type fetchOutput struct {
 	Jobs       []fetchJob `json:"jobs"`
 	TotalLinks int        `json:"total_links"`
+	ElapsedSec float64    `json:"elapsed_sec"`
 	// A listings page that challenges or blocks us renders successfully and yields nothing, which is
 	// indistinguishable from an empty board without this.
 	Blocked     bool   `json:"blocked"`
@@ -202,6 +276,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// blocked/blockReason record a challenge or refusal rather than a finding. Carried out of the agent
 	// phase so the cache decision and the summary can both see it.
 	blocked, blockReason := false, ""
+	// Where the time went, per phase. Without this a scrape is one opaque number, and "the agent is
+	// slow" and "the fetch is slow" call for opposite fixes.
+	scrapeStarted := time.Now()
+	agentSec, fetchSec, storeSec := 0.0, 0.0, 0.0
+	agentSteps, agentJudged := 0, false
+	judgement := ""
 	// remoteConfirmed is the verdict the resolving agent reached. It is cached alongside the URL,
 	// because a re-sweep that reads only the URL cannot tell a remote-filtered search page from a
 	// company's unfiltered job board - and would store on-site roles as remote.
@@ -262,13 +342,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 			"--max-steps", fmt.Sprintf("%d", *maxSteps),
 			"--trace", trace,
 		)
+		agentStarted := time.Now()
 		probeCmd.Env = childEnv
 		probeOut, err := probeCmd.Output()
 		if err != nil {
 			// The worker process failed. Re-check the host: if Ollama is down now, that is the cause
 			// and the batch runner should stop; otherwise it is an ordinary agent failure.
 			fmt.Fprintf(stderr, "scrape: agent: %v\n", err)
-			logger.Error("agent failed", slog.String("error", err.Error()), slog.Bool("timeout", ctx.Err() != nil))
+			logger.Error("agent failed",
+				slog.String("span", "agent"),
+				slog.String("error", err.Error()),
+				slog.Bool("timeout", ctx.Err() != nil),
+				slog.Float64("agent_s", round1(time.Since(agentStarted).Seconds())),
+			)
 			return classifyAgentFailure(fmt.Sprintf("agent: %v", err))
 		}
 		var probe probeOutput
@@ -286,10 +372,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 			}
 			fmt.Fprintf(stdout, "run_id=%d company=%s agent_failed=1 error=%q timeout=%t\n",
 				runID, company.Slug, probe.Error, probe.Timeout)
+			// steps and elapsed are reported here too: a timeout that reached step 14 nearly worked,
+			// and one that never left step 1 never started. "agent timed out" cannot tell them apart.
 			logger.Error("agent failed",
 				slog.String("error", probe.Error),
 				slog.Bool("timeout", probe.Timeout),
 				slog.String("span", "agent"),
+				slog.Int("agent_steps", probe.Steps),
+				slog.Float64("agent_s", round1(orSeconds(probe.ElapsedSec, agentStarted))),
 			)
 			return classifyAgentFailure(errText)
 		}
@@ -305,6 +395,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 				slog.String("reason", "listings_none"),
 				slog.String("span", "agent"),
 				slog.String("evidence", evidence),
+				slog.Int("agent_steps", probe.Steps),
+				slog.Float64("agent_s", round1(orSeconds(probe.ElapsedSec, agentStarted))),
 			)
 			return 0
 		}
@@ -316,11 +408,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 		listingsURL = probe.Answer.ListingsURL
 		remoteConfirmed = probe.Answer.HasRemoteSoftwareRoles
+		agentSec = orSeconds(probe.ElapsedSec, agentStarted)
+		agentSteps = probe.Steps
+		agentJudged = probe.Judged
+		judgement = judgementNote(probe.Judgement)
+		// The process as well as the answer: how many steps it took, how long, whether browser-use's own
+		// trajectory check accepted the path, and what the agent said it saw. A run that got the right
+		// answer the wrong way is the one worth finding, and it is invisible in an outcome alone.
 		logger.Info("agent decided",
 			slog.String("span", "agent"),
 			slog.String("listings_url", listingsURL),
 			slog.Bool("remote_confirmed", remoteConfirmed),
 			slog.Int("role_count", probe.Answer.RemoteSoftwareRoleCount),
+			slog.Int("agent_steps", probe.Steps),
+			slog.Float64("agent_s", round1(agentSec)),
+			slog.Bool("agent_successful", probe.Successful),
+			slog.Bool("agent_judged", probe.Judged),
+			slog.String("agent_judgement", judgement),
 			slog.String("evidence", probe.Answer.Evidence),
 		)
 
@@ -359,6 +463,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 			slog.String("reason", "no_remote_roles"),
 			slog.String("resolution", resolvedFrom),
 			slog.String("listings_url", listingsURL),
+			slog.Int("agent_steps", agentSteps),
+			slog.Float64("agent_s", round1(agentSec)),
+			slog.Bool("agent_judged", agentJudged),
+			slog.String("agent_judgement", judgement),
 		)
 		return 0
 	}
@@ -393,7 +501,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	fetchCmd := exec.CommandContext(ctx, python, fetchArgs...)
 	fetchCmd.Env = childEnv
+	fetchStarted := time.Now()
 	fetchOut, err := fetchCmd.Output()
+	fetchSec = orSeconds(0, fetchStarted)
 	if err != nil {
 		finish("error", 0, 0, 0, fmt.Sprintf("fetch: %v", err))
 		fmt.Fprintf(stderr, "scrape: fetch: %v\n", err)
@@ -422,11 +532,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		)
 		return 1
 	}
+	// The worker reports its own elapsed_sec, which excludes parent/process startup; prefer it.
+	fetchSec = orSeconds(fetched.ElapsedSec, fetchStarted)
 	logger.Info("fetch",
 		slog.String("span", "fetch"),
 		slog.String("listings_url", listingsURL),
 		slog.Int("page_links", fetched.TotalLinks),
 		slog.Int("extracted", len(fetched.Jobs)),
+		slog.Float64("fetch_s", round1(fetchSec)),
 		slog.Float64("crawl_delay_s", crawlDelay.Seconds()),
 	)
 
@@ -481,6 +594,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// 3. Store: upsert the US postings (the deterministic US-only filter).
+	storeStarted := time.Now()
 	inserted, refreshed, skipped := 0, 0, 0
 	for i, j := range fetched.Jobs {
 		if j.URL == "" || j.Error != "" {
@@ -518,6 +632,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			refreshed++
 		}
 	}
+
+	storeSec = time.Since(storeStarted).Seconds()
 
 	// 4. Stale-mark: close this company's postings on this vendor that the board no longer advertises,
 	// so a dropped posting does not stay 'open' forever. Two guards keep a partial observation from
@@ -564,6 +680,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		slog.String("resolution", resolvedFrom),
 		slog.Bool("blocked", blocked),
 		slog.String("block_reason", blockReason),
+		slog.Int("agent_steps", agentSteps),
+		slog.Float64("agent_s", round1(agentSec)),
+		slog.Float64("fetch_s", round1(fetchSec)),
+		slog.Float64("store_s", round1(storeSec)),
+		slog.Float64("total_s", round1(time.Since(scrapeStarted).Seconds())),
+		slog.Bool("agent_judged", agentJudged),
+		slog.String("agent_judgement", judgement),
+		slog.String("quality", qualityNote(resolvedFrom, remoteConfirmed, len(fetched.Jobs), inserted, skipped)),
 		slog.String("listings_url", listingsURL),
 		slog.Int("found", len(fetched.Jobs)),
 		slog.Int("inserted", inserted),

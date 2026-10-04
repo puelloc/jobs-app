@@ -113,6 +113,48 @@ The payoff is one query: `trace_timeline` in the [logs MCP](../tools/logmcp/READ
 chain — request → sweep → company → agent → failure — as a single ordered story, across processes that
 never knew about each other.
 
+## What jobs-app logs
+
+The events worth knowing about, because they are what a question gets answered from. Every one carries
+`trace_id`, and the phase events carry `sweep_id`, `run_id` and `company`.
+
+| `svc` | `msg` | The fields that matter |
+| --- | --- | --- |
+| `server` | `request` | `method`, `path`, `status`, `duration_ms` — the trace starts here |
+| `batch` | `sweep started` | `companies` (what will run), `candidates`, `skipped`, `limit`, `skip_ok`, `skip_traced` |
+| `batch` | `company skipped` | `company`, `index`, `reason` (`last run ok` / `browser-use trace present`) |
+| `batch` | `company started` / `company finished` | `company`, `duration_ms` |
+| `batch` | `sweep finished` | `ok`, `failed`, `skipped`, `total`, `stopped_early` |
+| `scrape` | `start` | `vendor`, `career_site_url` |
+| `scrape` | `agent decided` | `agent_steps`, `agent_s`, `role_count`, `remote_confirmed`, `agent_judged`, `agent_judgement`, `evidence` |
+| `scrape` | `skip` | `reason` (`no_remote_roles` / `listings_none` / `robots_disallowed`), plus the agent numbers |
+| `scrape` | `fetch` | `page_links`, `extracted`, `fetch_s`, `crawl_delay_s` |
+| `scrape` | `store` | `found`, `inserted`, `refreshed`, `skipped_non_us`, `remote_evidence` |
+| `scrape` | `stale` | `closed`, `note` (`none_observed` / `truncated_at_max_jobs`) |
+| `scrape` | `summary` | **the phase breakdown** — `agent_s`, `fetch_s`, `store_s`, `total_s` — plus `quality` |
+| `scrape` | `agent failed` | `agent_steps`, `agent_s`, `timeout` — a timeout at step 14 is not a timeout at step 1 |
+| `resolve` | `company unresolved` | `reason`, `attempts`, `sources` — why a careers site was not found |
+
+### Lessons that need successes, not failures
+
+`quality` on the `summary` line names the runs that **resolved without really working** — an outcome
+that looks clean and is not:
+
+| value | what it means |
+| --- | --- |
+| `cached_url_yielded_nothing` | a cached listings URL returned nothing at all: reconsider the TTL |
+| `agent_confirmed_remote_but_fetch_found_nothing` | the agent's verdict and the fetch disagree |
+| `agent_confirmed_remote_but_all_postings_non_us` | the remote filter was not applied as believed |
+| `agent_confirmed_remote_but_nothing_stored` | postings were fetched and then silently dropped |
+
+`agent_steps` and `agent_judgement` are the other half of this: browser-use's own trajectory check can
+flag a **right answer reached by a bad path**, and step count separates a three-step resolution from a
+nineteen-step one that got there by luck. Neither is visible in a success/failure outcome, which is
+exactly why they are recorded on the success path.
+
+The phase timings answer the question an optimisation actually starts with — `agent_s` versus
+`fetch_s` versus `store_s` — so "the scrape is slow" becomes a specific claim about which part.
+
 ## Operational notes
 
 - **Disk**: Loki keeps 90 days (`limits_config.retention_period`). Docker's own logs are capped at

@@ -147,6 +147,18 @@ Rules:
   site. Do NOT apply to any job, do NOT log in, and do NOT create an account."""
 
 
+def _steps_taken(agent) -> int:
+    """How many steps the agent managed before it failed, when that is knowable.
+
+    Guarded because a failure can happen before the agent has any history at all, and losing the count
+    must never turn a reported failure into a crash.
+    """
+    try:
+        return int(agent.history.number_of_steps())
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 async def run_one(url: str, company: str, host: str, model: str, max_steps: int,
                   timeout: int, use_vision: bool, domain_guard: bool, exe: str,
                   trace: TraceWriter) -> dict:
@@ -197,11 +209,16 @@ async def run_one(url: str, company: str, host: str, model: str, max_steps: int,
     try:
         history = await asyncio.wait_for(agent.run(max_steps=max_steps), timeout=timeout)
     except asyncio.TimeoutError:
+        # Steps are reported on the failure paths too. A run that timed out at step 14 is a different
+        # problem from one that never got past step 1 - the first nearly succeeded, the second never
+        # started - and "agent timed out" alone cannot tell them apart.
         return {"ok": False, "url": url, "company": company, "timeout": True,
+                "steps": _steps_taken(agent),
                 "elapsed_sec": round(time.monotonic() - start, 1)}
     except Exception as exc:  # noqa: BLE001 - reported, not re-raised
         return {"ok": False, "url": url, "company": company,
                 "error": f"{type(exc).__name__}: {exc}",
+                "steps": _steps_taken(agent),
                 "elapsed_sec": round(time.monotonic() - start, 1)}
 
     answer = getattr(history, "structured_output", None)
