@@ -155,7 +155,11 @@ async def run_one(url: str, company: str, host: str, model: str, max_steps: int,
     llm = ChatOllama(
         model=model,
         host=host,
-        ollama_options={"num_ctx": NUM_CTX, "temperature": 0.0},
+        # keep_alive=-1 pins the model in memory between runs, the same way browser_worker.py does.
+        # Without it Ollama unloads after its 5-minute default, and a sweep's per-company fetch phase
+        # routinely outlives that - so the next company's agent pays a full model load before its first
+        # step, on every company, for a 27B model.
+        ollama_options={"num_ctx": NUM_CTX, "temperature": 0.0, "keep_alive": -1},
     )
 
     profile_kwargs = {

@@ -115,38 +115,57 @@ type ScrapeCompany struct {
 	// ("" alongside an empty URL), which is what the TTL decision reads.
 	ListingsURL           string
 	ListingsURLResolvedAt string
+	// ListingsURLRemoteConfirmed is the verdict the resolving agent reached: true when it found remote
+	// software-engineering roles at ListingsURL, false when it found none. Nil means no agent has
+	// resolved this company. A re-sweep reads it to skip the agent for a company that had nothing while
+	// still knowing how to read that URL.
+	ListingsURLRemoteConfirmed *bool
 }
 
 // ScrapeCompanyBySlug returns the scrape inputs for a slug, or sql.ErrNoRows when there is no such
 // row. A NULL career_site_url comes back as "" so the caller can report "no stored URL" rather than
 // mistaking it for a missing company.
 func ScrapeCompanyBySlug(ctx context.Context, q Querier, slug string) (ScrapeCompany, error) {
-	var c ScrapeCompany
+	var (
+		c         ScrapeCompany
+		confirmed sql.NullInt64
+	)
 	err := q.QueryRowContext(ctx, `
 SELECT id, slug, name,
        COALESCE(career_site_url, ''),
        COALESCE(listings_url, ''),
-       COALESCE(listings_url_resolved_at, '')
+       COALESCE(listings_url_resolved_at, ''),
+       listings_url_remote_confirmed
   FROM companies WHERE slug = ?`, slug).
-		Scan(&c.ID, &c.Slug, &c.Name, &c.CareerSiteURL, &c.ListingsURL, &c.ListingsURLResolvedAt)
+		Scan(&c.ID, &c.Slug, &c.Name, &c.CareerSiteURL, &c.ListingsURL, &c.ListingsURLResolvedAt, &confirmed)
 	if err != nil {
 		return c, err
+	}
+	if confirmed.Valid {
+		v := confirmed.Int64 != 0
+		c.ListingsURLRemoteConfirmed = &v
 	}
 	return c, nil
 }
 
-// SetCompanyListingsURL caches the filtered listings URL a scrape resolved for a company, so the next
-// sweep can skip the agent that found it. The timestamp is database-generated, matching every other
-// timestamp in the schema.
-func SetCompanyListingsURL(ctx context.Context, q Querier, companyID int64, url string) error {
+// SetCompanyListingsURL caches the filtered listings URL a scrape resolved for a company, together with
+// the verdict the agent reached at it, so the next sweep can skip the agent that found both. The
+// timestamp is database-generated, matching every other timestamp in the schema.
+func SetCompanyListingsURL(ctx context.Context, q Querier, companyID int64, url string, remoteConfirmed bool) error {
+	confirmed := 0
+	if remoteConfirmed {
+		confirmed = 1
+	}
+
 	var id int64
 	err := q.QueryRowContext(ctx, `
 UPDATE companies
-   SET listings_url             = ?,
-       listings_url_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-       updated_at               = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+   SET listings_url                  = ?,
+       listings_url_resolved_at      = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+       listings_url_remote_confirmed = ?,
+       updated_at                    = strftime('%Y-%m-%dT%H:%M:%fZ','now')
  WHERE id = ?
-RETURNING id`, url, companyID).Scan(&id)
+RETURNING id`, url, confirmed, companyID).Scan(&id)
 	if err != nil {
 		return fmt.Errorf("cache listings url for company %d: %w", companyID, err)
 	}
@@ -158,9 +177,10 @@ func ClearCompanyListingsURL(ctx context.Context, q Querier, companyID int64) er
 	var id int64
 	err := q.QueryRowContext(ctx, `
 UPDATE companies
-   SET listings_url             = NULL,
-       listings_url_resolved_at = NULL,
-       updated_at               = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+   SET listings_url                  = NULL,
+       listings_url_resolved_at      = NULL,
+       listings_url_remote_confirmed = NULL,
+       updated_at                    = strftime('%Y-%m-%dT%H:%M:%fZ','now')
  WHERE id = ?
 RETURNING id`, companyID).Scan(&id)
 	if err != nil {

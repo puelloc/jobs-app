@@ -301,9 +301,12 @@ func TestCompanyListingsURLCacheRoundTrip(t *testing.T) {
 	if cold.ListingsURL != "" || cold.ListingsURLResolvedAt != "" {
 		t.Errorf("cold cache = %q/%q, want both empty", cold.ListingsURL, cold.ListingsURLResolvedAt)
 	}
+	if cold.ListingsURLRemoteConfirmed != nil {
+		t.Errorf("cold verdict = %v, want nil (no agent has resolved this company)", *cold.ListingsURLRemoteConfirmed)
+	}
 
 	const url = "https://jobs.acme.test/search?query=engineer&remote=1"
-	if err := SetCompanyListingsURL(ctx, database, 1, url); err != nil {
+	if err := SetCompanyListingsURL(ctx, database, 1, url, true); err != nil {
 		t.Fatalf("SetCompanyListingsURL: %v", err)
 	}
 
@@ -317,6 +320,22 @@ func TestCompanyListingsURLCacheRoundTrip(t *testing.T) {
 	if _, err := time.Parse(time.RFC3339, warm.ListingsURLResolvedAt); err != nil {
 		t.Errorf("ListingsURLResolvedAt = %q, want RFC3339: %v", warm.ListingsURLResolvedAt, err)
 	}
+	if warm.ListingsURLRemoteConfirmed == nil || !*warm.ListingsURLRemoteConfirmed {
+		t.Errorf("verdict = %v, want true", warm.ListingsURLRemoteConfirmed)
+	}
+
+	// A negative verdict is the case caching exists for: without it the company re-runs the agent on
+	// every sweep.
+	if err := SetCompanyListingsURL(ctx, database, 1, url, false); err != nil {
+		t.Fatalf("SetCompanyListingsURL(false): %v", err)
+	}
+	negative, err := ScrapeCompanyBySlug(ctx, database, "acme")
+	if err != nil {
+		t.Fatalf("ScrapeCompanyBySlug after negative set: %v", err)
+	}
+	if negative.ListingsURLRemoteConfirmed == nil || *negative.ListingsURLRemoteConfirmed {
+		t.Errorf("verdict = %v, want false", negative.ListingsURLRemoteConfirmed)
+	}
 
 	if err := ClearCompanyListingsURL(ctx, database, 1); err != nil {
 		t.Fatalf("ClearCompanyListingsURL: %v", err)
@@ -327,5 +346,8 @@ func TestCompanyListingsURLCacheRoundTrip(t *testing.T) {
 	}
 	if cleared.ListingsURL != "" || cleared.ListingsURLResolvedAt != "" {
 		t.Errorf("after clear = %q/%q, want both empty", cleared.ListingsURL, cleared.ListingsURLResolvedAt)
+	}
+	if cleared.ListingsURLRemoteConfirmed != nil {
+		t.Errorf("verdict after clear = %v, want nil", *cleared.ListingsURLRemoteConfirmed)
 	}
 }

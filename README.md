@@ -104,10 +104,11 @@ company the sweep writes its slug as a resume point (`<DATA_DIR>/sweep/resume`),
 can be continued with one click — the Runs dashboard's sweep panel shows a **"Resume from `<slug>`"**
 button whenever a resume point exists, and clears it when a sweep runs to completion.
 
-**The filtered listings URL is cached per company** (`companies.listings_url`, migration 018). The
-browser-use agent is by far the slowest part of a scrape — a local-model navigation loop — and the URL
-it finds is stable from one sweep to the next, so it is reused instead of re-derived. The agent runs
-only on a cold cache, past the TTL, or when asked to re-resolve:
+**The filtered listings URL is cached per company, together with the verdict the agent reached at it**
+(`companies.listings_url` and `listings_url_remote_confirmed`, migrations 018–019). The browser-use
+agent is by far the slowest part of a scrape — a local-model navigation loop — and both of its answers
+are stable from one sweep to the next. It runs only on a cold cache, past the TTL, or when asked to
+re-resolve:
 
 ```
 scrape -slug <slug> -vendor <vendor> [-listings-url-ttl 168h] [-refresh-listings-url]
@@ -117,6 +118,36 @@ scrape -slug <slug> -vendor <vendor> [-listings-url-ttl 168h] [-refresh-listings
 `-refresh-listings-url` forces a re-resolve once. A run that reused the cache says so — the summary
 line carries `resolution=cache`, and the run's trace gets a `resolution` event instead of being empty,
 which keeps `-skip-traced` and the job page's "Why this job matched" section meaningful.
+
+Caching the **verdict** and not just the URL is what makes a re-sweep model-free for every company: a
+company the agent found nothing for used to re-run the agent on every single sweep, and that is most of
+them. The verdict is also what keeps the fetch honest. The scrape stores postings as remote on the
+strength of the URL being a remote-filtered search page, which is only known to hold where the agent
+confirmed remote roles; where it did not, the run stops before the fetch rather than storing on-site
+roles as remote.
+
+**The posting's own schema.org JSON is read, not just stored.** It has always been captured verbatim in
+`raw_data`; now `datePosted` fills `posted_at`, `employmentType` fills `employment_type` (folded onto
+the column's vocabulary), and `jobLocationType` is counted as `remote_evidence=N` on the summary line.
+That last number is a measurement rather than a feature: it is what will decide whether a posting's own
+structured remote flag can replace the agent's per-company verdict. A missing field is never read as a
+negative — `jobLocationType` absent means "not stated", not "on-site". `baseSalary` is deliberately not
+parsed yet, because every board observed so far omits it; salary turns out not to be recoverable from
+structured data on this data set.
+
+`backfill` re-reads `raw_data` for rows captured before that parse existed and fills those columns:
+
+```
+docker compose run --rm app backfill          # dry run
+docker compose run --rm app backfill -commit  # write
+```
+
+It is idempotent, and it leaves `last_seen_at` alone: it re-reads a capture the scraper already made
+rather than claiming a fresh sighting, so the one honest freshness signal on those rows stays intact.
+
+The probe also pins the model in memory (`keep_alive=-1`) the way the validation worker does. Ollama's
+5-minute default would unload a 27B model during each company's fetch phase, making the next company
+pay a full reload before its first step.
 
 Each listings run records the company it scraped (`scrape_runs.company_id`, migration 016), which is
 what lets the skip decision know "did this company already succeed / already leave a trace". Each

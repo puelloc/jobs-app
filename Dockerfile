@@ -27,7 +27,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/batch ./cmd/batch \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/sp1500 ./cmd/sp1500 \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/scraper ./cmd/scraper \
- && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/listings ./cmd/listings
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/listings ./cmd/listings \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/backfill ./cmd/backfill
 
 # ---- runtime ----
 FROM python:3.12-slim-bookworm
@@ -58,7 +59,7 @@ RUN python3 -m venv /venv \
 COPY --chmod=0755 worker/ ./worker/
 
 # Go binaries: `server` is the long-running entrypoint, the rest are one-off jobs
-# run with `docker compose run --rm app <sp1500|scraper|classify|scrape|batch|listings>`.
+# run with `docker compose run --rm app <sp1500|scraper|classify|scrape|batch|listings|backfill>`.
 COPY --from=build /out/ /usr/local/bin/
 
 # A named user for the default PUID 1000; compose overrides the uid via `user:`.

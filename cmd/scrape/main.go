@@ -23,6 +23,7 @@ import (
 	"jobsapp/internal/config"
 	"jobsapp/internal/db"
 	"jobsapp/internal/exitcode"
+	"jobsapp/internal/jobposting"
 	"jobsapp/internal/robots"
 	"jobsapp/internal/store"
 )
@@ -166,19 +167,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// recently resolved URL is reused verbatim and the agent is skipped entirely. It runs only on a
 	// cold cache, past the TTL, or when the caller forces a re-resolve.
 	listingsURL, resolvedFrom := "", "agent"
+	// remoteConfirmed is the verdict the resolving agent reached. It is cached alongside the URL,
+	// because a re-sweep that reads only the URL cannot tell a remote-filtered search page from a
+	// company's unfiltered job board - and would store on-site roles as remote.
+	remoteConfirmed := false
+
 	if cached, ok := reuseCachedListingsURL(company, time.Now().UTC(), *listingsURLTTL, *refreshListingsURL); ok {
 		listingsURL, resolvedFrom = cached, "cache"
+		// A row cached before the verdict was recorded reads as unconfirmed, which is the conservative
+		// reading: it makes the run skip the fetch rather than trust an unverified URL.
+		remoteConfirmed = company.ListingsURLRemoteConfirmed != nil && *company.ListingsURLRemoteConfirmed
 		// The cached path never runs the agent, so this run would otherwise have no trace at all -
 		// and the run page, the -skip-traced sweep option, and the job page's "why did this match"
 		// section all read one. Record the resolution the agent would have produced.
 		appendTraceEvent(trace, map[string]any{
-			"event":        "resolution",
-			"source":       "cache",
-			"listings_url": cached,
-			"resolved_at":  company.ListingsURLResolvedAt,
+			"event":            "resolution",
+			"source":           "cache",
+			"listings_url":     cached,
+			"resolved_at":      company.ListingsURLResolvedAt,
+			"remote_confirmed": remoteConfirmed,
 		})
-		fmt.Fprintf(stdout, "run_id=%d company=%s listings_url=cache resolved_at=%s url=%s\n",
-			runID, company.Slug, company.ListingsURLResolvedAt, cached)
+		fmt.Fprintf(stdout, "run_id=%d company=%s listings_url=cache resolved_at=%s remote_confirmed=%t url=%s\n",
+			runID, company.Slug, company.ListingsURLResolvedAt, remoteConfirmed, cached)
 	}
 
 	// The careers-page crawl delay only exists on the agent path; the cached path never touches the
@@ -256,22 +266,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 			runID, company.Slug, probe.Answer.HasRemoteSoftwareRoles,
 			probe.Answer.RemoteSoftwareRoleCount, probe.Answer.Evidence)
 
-		// If the agent found no remote roles, there is nothing to scrape. Skip the fetch rather than
-		// extracting onsite postings and marking them remote.
-		if !probe.Answer.HasRemoteSoftwareRoles {
-			finish("ok", 0, 0, 0, "")
-			fmt.Fprintf(stdout, "run_id=%d company=%s no_remote_roles=true found=0 evidence=%q\n",
-				runID, company.Slug, probe.Answer.Evidence)
-			return 0
-		}
-
 		listingsURL = probe.Answer.ListingsURL
+		remoteConfirmed = probe.Answer.HasRemoteSoftwareRoles
 
-		// Cache the resolution so the next sweep can skip the agent. A failed write is logged, not
-		// fatal: the scrape itself is unaffected, and the only cost is re-running the agent next time.
-		if err := store.SetCompanyListingsURL(ctx, database, company.ID, listingsURL); err != nil {
+		// Cache the URL and the verdict together, whatever the verdict was. Caching only the positive
+		// one - as this did before - left the majority of companies (the ones with nothing open)
+		// re-running the agent on every single sweep. A failed write is logged, not fatal: the scrape
+		// itself is unaffected, and the only cost is re-running the agent next time.
+		if err := store.SetCompanyListingsURL(ctx, database, company.ID, listingsURL, remoteConfirmed); err != nil {
 			fmt.Fprintf(stderr, "scrape: cache listings url for %s: %v\n", company.Slug, err)
 		}
+	}
+
+	// A URL the agent did not confirm remote roles at may not be a remote-filtered search page at all:
+	// the agent is only told to apply a remote filter "if there is" one. Fetching it would store on-site
+	// roles under is_remote = true, so the fetch is skipped rather than guessed at. The cost of that skip
+	// is now paid once, not once per sweep, because the verdict above is cached with the URL - the next
+	// sweep reaches this same point without running the agent.
+	if !remoteConfirmed {
+		finish("ok", 0, 0, 0, "")
+		fmt.Fprintf(stdout, "run_id=%d company=%s no_remote_roles=true source=%s url=%s\n",
+			runID, company.Slug, resolvedFrom, listingsURL)
+		return 0
 	}
 
 	// 2. Fetch: honor the listings origin's robots.txt too, then render and extract.
@@ -327,15 +343,31 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// longer offers. It mirrors the RemoteOK path, which extracts an element's identifier before
 	// decoding the rest of the element so a partly-broken element is never mistaken for an absent one.
 	observed := make(map[string]struct{}, len(fetched.Jobs))
-	for _, j := range fetched.Jobs {
+
+	// The board's own structured data is read once per posting, in the same pass that builds the
+	// observed set: posted_at and employment_type were being left NULL even though every posting
+	// carries them in the JSON this run already fetched and stored. remoteEvidence counts the postings
+	// that state their own remote status, which is the measurement that decides whether that field can
+	// ever replace the agent's per-company verdict.
+	postings := make([]jobposting.Posting, len(fetched.Jobs))
+	remoteEvidence := 0
+	for i, j := range fetched.Jobs {
 		if j.URL != "" {
 			observed[store.ExternalID(extPattern, j.URL)] = struct{}{}
+		}
+		posting, ok := jobposting.Parse(j.RawData)
+		if !ok {
+			continue
+		}
+		postings[i] = posting
+		if posting.Remote != nil {
+			remoteEvidence++
 		}
 	}
 
 	// 3. Store: upsert the US postings (the deterministic US-only filter).
 	inserted, refreshed, skipped := 0, 0, 0
-	for _, j := range fetched.Jobs {
+	for i, j := range fetched.Jobs {
 		if j.URL == "" || j.Error != "" {
 			continue
 		}
@@ -352,7 +384,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 			LocationText: strOrEmpty(j.LocationText),
 			Country:      strOrEmpty(j.Country),
 			IsUS:         j.IsUS,
-			IsRemote:     true,
+			// is_remote stays true here on the strength of the URL: this branch is only reached when the
+			// agent confirmed remote roles at a remote-filtered search URL, so every posting on it is a
+			// remote opening. The posting's own jobLocationType is the evidence, not the gate.
+			IsRemote:       true,
+			EmploymentType: postings[i].EmploymentType,
+			PostedAt:       postings[i].PostedAt,
 		}
 		_, isNew, err := store.UpsertBrowserJob(ctx, database, job, company.ID, jobPlatformID, runID)
 		if err != nil {
@@ -392,8 +429,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	finish("ok", int64(inserted+refreshed+skipped), int64(inserted), int64(refreshed), "")
-	fmt.Fprintf(stdout, "run_id=%d company=%s listings=%s resolution=%s found=%d inserted=%d refreshed=%d skipped=%d closed=%d",
-		runID, company.Slug, listingsURL, resolvedFrom, len(fetched.Jobs), inserted, refreshed, skipped, closed)
+	fmt.Fprintf(stdout, "run_id=%d company=%s listings=%s resolution=%s found=%d inserted=%d refreshed=%d skipped=%d closed=%d remote_evidence=%d",
+		runID, company.Slug, listingsURL, resolvedFrom, len(fetched.Jobs), inserted, refreshed, skipped, closed, remoteEvidence)
 	if staleNote != "" {
 		fmt.Fprintf(stdout, " stale=skipped reason=%s", staleNote)
 	}
