@@ -177,6 +177,37 @@ exactly why they are recorded on the success path.
 The phase timings answer the question an optimisation actually starts with — `agent_s` versus
 `fetch_s` versus `store_s` — so "the scrape is slow" becomes a specific claim about which part.
 
+## Request logging is filtered, deliberately
+
+The UI polls six endpoints every five seconds while a run page is open, and recording each one made
+**98.9% of this store** noise:
+
+| lines/hour | share | |
+| --- | --- | --- |
+| 2,078 | 98.9% | `svc=server` — almost all successful polling GETs |
+| 13 | 0.6% | `svc=batch` |
+| 6 | 0.3% | `svc=scrape` |
+
+Nineteen lines an hour could explain something, and they were buried under two thousand that could not.
+So a request is recorded only when it can explain something:
+
+| kept | why |
+| --- | --- |
+| any non-GET | a trigger, a stop, a pause — and the POST that starts a sweep is the **first line of a `trace_timeline`**, so dropping it would break the story at its root |
+| any 4xx/5xx | the reason request logs exist at all |
+| anything slower than 500ms | a symptom even when it succeeded |
+
+Everything else is still *traced* — the trace id is assigned and echoed in `X-Trace-Id`, so a caller can
+follow its own request into whatever it triggers — it is only the record of a successful poll that is
+not kept. Each kept line says `logged_because`, so a line's presence is never a mystery.
+
+To see every request while debugging the UI itself:
+
+```yaml
+environment:
+  JOBS_LOG_REQUESTS: all
+```
+
 ## Operational notes
 
 - **Disk**: Loki keeps 90 days (`limits_config.retention_period`). Docker's own logs are capped at

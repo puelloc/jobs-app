@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func int64Ptr(v int64) *int64 { return &v }
@@ -222,8 +223,10 @@ func TestMiddlewareStartsATraceWhenNoneIsSent(t *testing.T) {
 	if !hex32.MatchString(generated) {
 		t.Fatalf("response trace header = %q, want a generated id", generated)
 	}
-	if got := decode(t, &buf)["trace_id"]; got != generated {
-		t.Errorf("logged %v, returned %q", got, generated)
+	// No log line, and that is the point of the test's neighbour: a successful poll is not recorded, but
+	// it is still traced, so a caller can follow the request into whatever it goes on to trigger.
+	if buf.Len() != 0 {
+		t.Errorf("a successful GET wrote %d bytes, want none: %s", buf.Len(), buf.String())
 	}
 }
 
@@ -246,5 +249,110 @@ func TestMiddlewareAcceptsTheSimpleHeader(t *testing.T) {
 func TestFromContextWithoutAnIdentityStillProducesOne(t *testing.T) {
 	if got := FromContext(context.Background()); !hex32.MatchString(got.TraceID) {
 		t.Errorf("trace = %q, want a generated id", got.TraceID)
+	}
+}
+
+func TestNotableRequestKeepsWhatCanExplainSomething(t *testing.T) {
+	get := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
+	post := httptest.NewRequest(http.MethodPost, "/api/pipeline/batch", nil)
+	head := httptest.NewRequest(http.MethodHead, "/", nil)
+
+	cases := []struct {
+		name    string
+		req     *http.Request
+		status  int
+		elapsed time.Duration
+		logAll  bool
+		want    bool
+		why     string
+	}{
+		{
+			// The noise: 98.9% of the store was this. Nothing about a successful, instant poll can
+			// explain anything.
+			name: "a successful fast poll is dropped", req: get, status: 200, elapsed: 2 * time.Millisecond,
+			want: false,
+		},
+		{
+			name: "a state change is kept", req: post, status: 202, elapsed: time.Millisecond,
+			want: true, why: "state-changing",
+		},
+		{
+			// The POST above is also the first line of a trace_timeline; dropping reads must not touch it.
+			name: "a failing read is kept", req: get, status: 500, elapsed: time.Millisecond,
+			want: true, why: "failed",
+		},
+		{
+			name: "a 404 is kept", req: get, status: 404, elapsed: time.Millisecond,
+			want: true, why: "failed",
+		},
+		{
+			name: "a slow read is kept", req: get, status: 200, elapsed: 900 * time.Millisecond,
+			want: true, why: "slow",
+		},
+		{
+			// The threshold is a boundary worth pinning: just under is polling, at is notable.
+			name: "exactly at the threshold counts as slow", req: get, status: 200, elapsed: slowRequest,
+			want: true, why: "slow",
+		},
+		{
+			name: "a HEAD poll is dropped too", req: head, status: 200, elapsed: time.Millisecond,
+			want: false,
+		},
+		{
+			name: "JOBS_LOG_REQUESTS=all restores everything", req: get, status: 200, elapsed: time.Millisecond,
+			logAll: true, want: true, why: "all-requests-enabled",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, why := notableRequest(tc.req, tc.status, tc.elapsed, tc.logAll)
+			if got != tc.want {
+				t.Errorf("notableRequest(...) = %v, want %v", got, tc.want)
+			}
+			if tc.want && why != tc.why {
+				t.Errorf("reason = %q, want %q", why, tc.why)
+			}
+		})
+	}
+}
+
+func TestMiddlewareStaysSilentOnAPollButKeepsTheTrace(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Config{App: "jobs-app", Service: "server", Writer: &buf}, Identity{TraceID: NewTraceID()})
+
+	traceID := NewTraceID()
+	handler := Middleware(logger, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
+	request.Header.Set(TraceHeader, traceID)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if buf.Len() != 0 {
+		t.Errorf("a successful poll wrote %d bytes, want none: %s", buf.Len(), buf.String())
+	}
+	// Silence about the record, not about the correlation: the trace is still adopted and returned so a
+	// caller can follow its own request through everything it triggers.
+	if got := recorder.Header().Get(TraceHeader); got != traceID {
+		t.Errorf("response trace header = %q, want %q", got, traceID)
+	}
+}
+
+func TestMiddlewareLogsAStateChangeWithItsReason(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Config{App: "jobs-app", Service: "server", Writer: &buf}, Identity{TraceID: NewTraceID()})
+	handler := Middleware(logger, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/pipeline/batch", nil))
+
+	line := decode(t, &buf)
+	if line["path"] != "/api/pipeline/batch" || line["status"] != float64(http.StatusAccepted) {
+		t.Errorf("line = %v", line)
+	}
+	if line["logged_because"] != "state-changing" {
+		t.Errorf("logged_because = %v, want state-changing", line["logged_because"])
 	}
 }

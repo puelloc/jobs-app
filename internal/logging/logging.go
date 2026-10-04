@@ -40,7 +40,14 @@ const (
 	EnvLevel   = "JOBS_LOG_LEVEL"
 	EnvApp     = "JOBS_APP"
 	EnvService = "JOBS_SERVICE"
+	// EnvRequests widens request logging back to every request. The default records only what can
+	// explain something; "all" is for the fifteen minutes you spend debugging the UI itself.
+	EnvRequests = "JOBS_LOG_REQUESTS"
 )
+
+// slowRequest is the threshold above which a read is worth recording even though it succeeded: a GET
+// that took half a second is a signal, a GET that took two milliseconds is the UI polling.
+const slowRequest = 500 * time.Millisecond
 
 // TraceHeader is the simple header, alongside the standard W3C one, so a shell or a service that has
 // no traceparent support can still join the chain.
@@ -368,20 +375,59 @@ func Middleware(logger *Logger, next http.Handler) http.Handler {
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(recorder, r.WithContext(ctx))
 
-		requestLogger.Info("request",
+		elapsed := time.Since(started)
+		keep, why := notableRequest(r, recorder.status, elapsed, os.Getenv(EnvRequests) == "all")
+		if !keep {
+			// Deliberately silent. The trace id was still assigned and echoed, so a caller that wants
+			// this request followed can send it on - it is the *record* of a successful poll that carries
+			// nothing, not the correlation.
+			return
+		}
+
+		attrs := []any{
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),
 			slog.Int("status", recorder.status),
-			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-		)
-
-		// A 5xx is worth surfacing at a level an alert can key on without parsing the message.
-		if recorder.status >= http.StatusInternalServerError {
-			requestLogger.Error("request failed",
-				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path),
-				slog.Int("status", recorder.status),
-			)
+			slog.Int64("duration_ms", elapsed.Milliseconds()),
+			slog.String("logged_because", why),
+		}
+		switch {
+		case recorder.status >= http.StatusInternalServerError:
+			// At a level an alert can key on without parsing the message.
+			requestLogger.Error("request failed", attrs...)
+		case why == "slow":
+			requestLogger.Warn("request", attrs...)
+		default:
+			requestLogger.Info("request", attrs...)
 		}
 	})
+}
+
+// notableRequest reports whether a finished request is worth a log line, and why.
+//
+// The UI polls several endpoints every five seconds while a run page is open, and those lines were
+// 98.9% of everything in the store - 2,078 of 2,102 lines in one hour, none of which said anything.
+// That is not merely wasted disk: it buries the nineteen lines that month that explain a failure, and
+// it makes every question slower to answer.
+//
+// What is kept is everything that can explain something:
+//
+//   - a request that changed state (a trigger, a stop, a pause) - and the POST that starts a sweep is
+//     the first line of a trace_timeline, so losing it would break the story at its root
+//   - a request that failed, which is the point of having request logs at all
+//   - a request that was slow, which is a symptom even when it succeeded
+func notableRequest(r *http.Request, status int, elapsed time.Duration, logAll bool) (bool, string) {
+	if logAll {
+		return true, "all-requests-enabled"
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return true, "state-changing"
+	}
+	if status >= http.StatusBadRequest {
+		return true, "failed"
+	}
+	if elapsed >= slowRequest {
+		return true, "slow"
+	}
+	return false, ""
 }
