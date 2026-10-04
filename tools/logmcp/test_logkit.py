@@ -17,6 +17,7 @@ from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import logkit  # noqa: E402
 from logkit import LogKit, LogKitError, Loki, parsed_line, parse_window, streams_to_lines  # noqa: E402
 
 
@@ -182,7 +183,7 @@ class TestParsedLine(unittest.TestCase):
 class TestTraceTimeline(unittest.TestCase):
     def test_builds_a_timeline_across_services(self) -> None:
         trace = "b" * 32
-        query = f'{{app=~".+"}} | json | trace_id="{trace}"'
+        query = f'{{app=~".+"}} | trace_id = "{trace}"'
         body = stream_body([
             (_ns(30), {"app": "jobs-app", "svc": "batch"},
              json.dumps({"level": "info", "app": "jobs-app", "svc": "batch", "msg": "sweep started",
@@ -212,7 +213,7 @@ class TestTraceTimeline(unittest.TestCase):
 
     def test_normalises_case(self) -> None:
         trace = "c" * 32
-        fake = FakeLoki(ranges={f'{{app=~".+"}} | json | trace_id="{trace}"': stream_body([])})
+        fake = FakeLoki(ranges={f'{{app=~".+"}} | trace_id = "{trace}"': stream_body([])})
         LogKit(fake).trace_timeline(trace.upper())
         self.assertIn(trace, fake.queries[0][1]["query"])
 
@@ -363,6 +364,213 @@ def live_loki_available() -> bool:
         return False
 
 
+# ------------------------------------------------------------------ lookups by key
+
+
+def run_body(entries: list[tuple[float, dict]]) -> dict:
+    """A query_range body from (seconds_ago, structured line) tuples.
+
+    Application fields go at the top level of the JSON body, exactly as the apps log them; parsed_line
+    is what moves the unrecognised ones under `fields`.
+    """
+    return stream_body([
+        (_ns(age), {"app": "jobs-app", "container": "jobs_app"}, json.dumps(line))
+        for age, line in entries
+    ])
+
+
+class TestLookupQueryBuilding(unittest.TestCase):
+    def test_lookups_filter_structured_metadata_without_parsing(self) -> None:
+        # These fields are structured metadata, so the store can filter them against the index. Doing it
+        # with `| json` instead would parse every line in the window to find one run.
+        for key, value in (("run_id", "630"), ("sweep_id", "629"), ("company", "acme"),
+                           ("listing_id", "12"), ("trace_id", "a" * 32)):
+            with self.subTest(key=key):
+                fake = FakeLoki()
+                LogKit(fake).search_logs("{app=~\".+\"}", window="1h")  # primes no state
+                fake.queries.clear()
+                if key == "trace_id":
+                    LogKit(fake).trace_timeline(value, window="1h")
+                else:
+                    method = {"run_id": "run_timeline", "sweep_id": "sweep_timeline",
+                              "company": "company_history", "listing_id": "listing_story"}[key]
+                    argument = int(value) if key in ("run_id", "sweep_id", "listing_id") else value
+                    getattr(LogKit(fake), method)(argument, window="1h")
+                query = fake.queries[0][1]["query"]
+                self.assertIn(f"| {key} = ", query)
+                self.assertNotIn("| json", query)
+
+    def test_a_quote_in_a_company_cannot_break_the_query(self) -> None:
+        # An unescaped quote makes the query error, and an error is indistinguishable from "no such
+        # company" at this end.
+        fake = FakeLoki()
+        LogKit(fake).company_history('acme" or x="', window="1h")
+        query = fake.queries[0][1]["query"]
+        self.assertIn(r'\"', query, "the quote must be escaped")
+        self.assertNotIn('acme" or', query, "the raw quote must not reach the query")
+
+    def test_rejects_ids_that_are_not_positive_integers(self) -> None:
+        for bad in (0, -1, "630"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(LogKitError):
+                    LogKit(FakeLoki()).run_timeline(bad)  # type: ignore[arg-type]
+        with self.assertRaises(LogKitError):
+            LogKit(FakeLoki()).company_history("   ")
+
+
+class TestRunFacts(unittest.TestCase):
+    def facts(self, lines: list[dict]) -> dict:
+        entries = [{"ts_ns": int(_ns(5)), "labels": {"app": "jobs-app"}, "line": json.dumps(l)}
+                   for l in lines]
+        return logkit._run_facts([logkit.parsed_line(e) for e in entries])
+
+    def test_outcome_prefers_the_most_specific_evidence(self) -> None:
+        cases = [
+            ([{"msg": "agent failed", "error": "timeout"}, {"msg": "summary"}], "agent_failed"),
+            ([{"msg": "listings page blocked", "block_reason": "captcha"}], "blocked"),
+            ([{"msg": "skip", "reason": "robots_disallowed"}], "robots_disallowed"),
+            ([{"msg": "skip"}], "skipped"),
+            ([{"msg": "listing stored", "listing_id": 7}], "stored"),
+            ([{"msg": "summary", "total_s": 3}], "completed"),
+            ([{"msg": "start"}], "in_progress"),
+        ]
+        for lines, want in cases:
+            with self.subTest(want=want):
+                self.assertEqual(self.facts(lines)["outcome"], want)
+
+    def test_counts_steps_and_falls_back_to_the_reported_number(self) -> None:
+        seen = self.facts([{"msg": "agent step", "step": 1}, {"msg": "agent step", "step": 2}])
+        self.assertEqual(seen["agent_steps"], 2)
+        reported = self.facts([{"msg": "agent failed", "agent_steps": 9}])
+        self.assertEqual(reported["agent_steps"], 9)
+        self.assertIsNone(self.facts([{"msg": "start"}])["agent_steps"])
+
+    def test_collects_listing_ids_and_flags_a_block(self) -> None:
+        got = self.facts([
+            {"msg": "listing stored", "listing_id": 11},
+            {"msg": "listing stored", "listing_id": 12},
+            {"msg": "summary", "blocked": True, "block_reason": "challenge"},
+        ])
+        self.assertEqual(got["listing_ids"], [11, 12])
+        self.assertEqual(got["listings_stored"], 2)
+        self.assertEqual(got["outcome"], "blocked")
+        self.assertEqual(got["block_reason"], "challenge")
+
+
+class TestRunTimeline(unittest.TestCase):
+    def test_summarises_a_run_from_its_lines(self) -> None:
+        query = '{app=~".+"} | run_id = "630"'
+        body = run_body([
+            (60, {"msg": "start", "run_id": 630, "company": "acme", "vendor": "workday"}),
+            (50, {"msg": "agent step", "run_id": 630, "company": "acme", "step": 1}),
+            (40, {"msg": "agent step", "run_id": 630, "company": "acme", "step": 2}),
+            (20, {"msg": "agent decided", "run_id": 630, "company": "acme",
+                "listings_url": "https://x.test/jobs", "remote_confirmed": False,
+                "agent_steps": 2, "agent_s": 41.5}),
+            (10, {"msg": "summary", "run_id": 630, "company": "acme",
+                "agent_s": 41.5, "fetch_s": 3.2, "store_s": 0.1, "total_s": 45.0,
+                "inserted": 4, "quality": ""}),
+        ])
+        got = LogKit(FakeLoki(ranges={query: body})).run_timeline(630, window="1h")
+        self.assertTrue(got["found"])
+        self.assertEqual(got["company"], "acme")
+        self.assertEqual(got["vendor"], "workday")
+        self.assertEqual(got["agent_steps"], 2)
+        self.assertEqual(got["agent_s"], 41.5)
+        self.assertEqual(got["listings_url"], "https://x.test/jobs")
+        self.assertEqual(got["postings"]["inserted"], 4)
+        self.assertEqual(got["agent"]["remote_confirmed"], False)
+        self.assertIsNone(got["quality"], "an empty quality must read as absent, not as a value")
+
+    def test_an_unknown_run_says_so_rather_than_returning_nothing(self) -> None:
+        got = LogKit(FakeLoki()).run_timeline(999999, window="1h")
+        self.assertFalse(got["found"])
+        self.assertEqual(got["lines"], 0)
+        self.assertIn("window", got.get("note", ""))
+
+
+class TestSweepTimeline(unittest.TestCase):
+    def test_groups_companies_by_run_and_tallies_outcomes(self) -> None:
+        query = '{app=~".+"} | sweep_id = "629"'
+        body = run_body([
+            (90, {"msg": "sweep started", "sweep_id": 629,
+                "companies": 2, "candidates": 436, "limit": 2, "skip_ok": True, "skip_traced": False}),
+            (80, {"msg": "company skipped", "sweep_id": 629, "company": "skipped-co",
+                  "reason": "last run ok"}),
+            (70, {"msg": "company started", "sweep_id": 629, "company": "a-co", "index": 1}),
+            (60, {"msg": "start", "sweep_id": 629, "run_id": 700, "company": "a-co",
+                  "vendor": "lever"}),
+            (50, {"msg": "skip", "sweep_id": 629, "run_id": 700, "company": "a-co",
+                  "reason": "no_remote_roles"}),
+            (40, {"msg": "company started", "sweep_id": 629, "company": "b-co", "index": 2}),
+            (30, {"msg": "start", "sweep_id": 629, "run_id": 701, "company": "b-co",
+                  "vendor": "workday"}),
+            (20, {"msg": "listing stored", "sweep_id": 629, "run_id": 701, "company": "b-co",
+                  "listing_id": 5}),
+            (10, {"msg": "company finished", "sweep_id": 629, "company": "b-co",
+                  "duration_ms": 1234}),
+        ])
+        got = LogKit(FakeLoki(ranges={query: body})).sweep_timeline(629, window="1h")
+        self.assertEqual(got["plan"]["companies"], 2)
+        self.assertEqual(got["plan"]["limit"], 2)
+        self.assertEqual(got["skipped_before_starting"],
+                         [{"company": "skipped-co", "reason": "last run ok"}])
+        self.assertEqual(got["outcomes"], {"no_remote_roles": 1, "stored": 1})
+        by_run = {row["run_id"]: row for row in got["companies"]}
+        self.assertEqual(by_run[700]["company"], "a-co")
+        self.assertEqual(by_run[700]["outcome"], "no_remote_roles")
+        self.assertEqual(by_run[701]["outcome"], "stored")
+        self.assertEqual(by_run[701]["listings_stored"], 1)
+        self.assertEqual(by_run[701]["duration_ms"], 1234)
+
+
+class TestCompanyHistory(unittest.TestCase):
+    def test_lists_runs_newest_first_with_a_tally(self) -> None:
+        query = '{app=~".+"} | company = "abbott-laboratories"'
+        body = run_body([
+            (500, {"msg": "start", "run_id": 10, "company": "abbott-laboratories",
+                   "vendor": "workday"}),
+            (400, {"msg": "agent failed", "run_id": 10, "company": "abbott-laboratories",
+                   "error": "timed out", "agent_steps": 12}),
+            (90, {"msg": "start", "run_id": 20, "company": "abbott-laboratories",
+                  "vendor": "workday"}),
+            (80, {"msg": "agent failed", "run_id": 20, "company": "abbott-laboratories",
+                  "error": "timed out", "agent_steps": 14}),
+        ])
+        got = LogKit(FakeLoki(ranges={query: body})).company_history("abbott-laboratories", window="30d")
+        self.assertEqual(got["runs"], 2)
+        self.assertEqual(got["outcomes"], {"agent_failed": 2})
+        self.assertEqual([row["run_id"] for row in got["history"]], [20, 10],
+                         "newest run first")
+        self.assertEqual(got["history"][0]["agent_steps"], 14)
+
+
+class TestListingStory(unittest.TestCase):
+    def test_separates_discovery_from_applications(self) -> None:
+        query = '{app=~".+"} | listing_id = "12345"'
+        body = stream_body([
+            (_ns(500), {"app": "jobs-app", "container": "jobs_app"}, json.dumps({
+                "msg": "listing stored", "listing_id": 12345, "company": "acme", "run_id": 700,
+                "is_remote": True, "title": "Staff Engineer", "url": "https://x.test/1"})),
+            (_ns(60), {"app": "apply-app", "container": "apply_app"}, json.dumps({
+                "app": "apply-app", "msg": "application submitted", "listing_id": 12345,
+                "application_id": 9})),
+        ])
+        got = LogKit(FakeLoki(ranges={query: body})).listing_story(12345, window="30d")
+        self.assertEqual(got["company"], "acme")
+        self.assertEqual(got["title"], "Staff Engineer")
+        self.assertTrue(got["is_remote"])
+        self.assertEqual(len(got["discovered"]), 1)
+        self.assertEqual(got["discovered"][0]["run_id"], 700)
+        self.assertEqual(len(got["applications"]), 1)
+        self.assertEqual(got["applications"][0]["app"], "apply-app")
+
+    def test_a_listing_nothing_references_yet_explains_the_contract(self) -> None:
+        got = LogKit(FakeLoki()).listing_story(1, window="30d")
+        self.assertFalse(got["found"])
+        self.assertIn("listing_id", got["note"])
+
+
 @unittest.skipUnless(os.environ.get("LOKI_URL_TEST") or live_loki_available(), "no Loki reachable")
 class TestAgainstRealLoki(unittest.TestCase):
     """The LogQL these tools build, checked against a real Loki: a fake proves the code does what this
@@ -386,7 +594,7 @@ class TestAgainstRealLoki(unittest.TestCase):
         """Push one trace across two services and read it back in order.
 
         This verifies the correlation design end to end. The fakes in the rest of the suite prove the
-        parsing is right; only a real store proves the query - `| json | trace_id="..."` against
+        parsing is right; only a real store proves the query - `| trace_id = "..."` against
         structured metadata - is one Loki actually accepts.
         """
         import random

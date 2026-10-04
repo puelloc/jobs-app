@@ -163,3 +163,40 @@ design end to end.
   surface.
 - **`trace_timeline` needs a trace id**, so a failure that predates trace propagation — or one from an
   app that has not adopted it yet — has to be found with `search_logs` and `company`/`run_id` instead.
+
+## Lookups by key
+
+Five tools answer a question about one specific thing rather than a pattern across everything. They
+match on the correlation fields directly, without `| json`, because those fields are **structured
+metadata** in the store — so the filter is applied against the index instead of parsing every line in
+the window. (A lookup written as `{msg="agent step"}` silently returns nothing: `msg` is not a label.)
+
+| tool | question it answers |
+| --- | --- |
+| `run_timeline(run_id)` | one company's scrape, end to end: outcome, agent steps and seconds, phase timings, listings stored, and the whole timeline |
+| `sweep_timeline(sweep_id)` | what the sweep planned, who it skipped before starting and why, and a row per company with its outcome |
+| `company_history(company)` | every run for one company, newest first, plus an outcome tally — is this the same failure every time? |
+| `listing_story(listing_id)` | one job across apps: the scrape that found it and every application made from it |
+
+Each returns both a derived summary and the raw timeline, so the conclusion and the evidence arrive
+together. The summary is derived the same way in all of them (`_run_facts`), so a company's outcome in a
+sweep listing cannot disagree with the same company's outcome looked up on its own.
+
+`run_timeline` is the workhorse. On a real run:
+
+```
+run_timeline(630)  outcome=no_remote_roles  steps=16  agent_s=623.2  vendor=greenhouse
+```
+
+Sixteen steps and ten minutes for one company is the kind of thing that is invisible in a run list and
+obvious here.
+
+### Keeping the query cheap
+
+```python
+# Yes: structured metadata, filtered by the store.
+'{app=~".+"} | run_id = "630"'
+
+# No: parses every line in the window to find one run, and `msg` is not a label at all.
+'{app=~".+"} | json | run_id="630"'
+```

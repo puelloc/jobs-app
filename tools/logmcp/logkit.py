@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 DEFAULT_LOKI = "http://127.0.0.1:3100"
 
@@ -163,6 +164,313 @@ class Loki:
         start = end - int(window.total_seconds() * 1_000_000_000)
         body = self._get(f"/loki/api/v1/label/{urllib.parse.quote(name)}/values", {"start": start, "end": end})
         return sorted(body.get("data") or [])
+
+
+# ---------------------------------------------------------------------------- lookups
+
+# The keys a lookup can be built on. They are structured metadata in the store rather than labels, which
+# is why they can be filtered without parsing the line: see LogKit._metadata_lines.
+LOOKUP_KEYS = ("trace_id", "run_id", "sweep_id", "company", "listing_id", "application_id")
+
+
+def _logql_string(value: str) -> str:
+    """A LogQL string literal, escaped.
+
+    An unescaped quote does not fail loudly here: the query errors, the caller sees no lines, and "no
+    such company" and "I broke the query" become the same answer.
+    """
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").replace("\r", " ")
+    return f'"{escaped}"'
+
+
+def _field(line: dict, key: str):
+    """A field from a parsed line, wherever it landed.
+
+    parsed_line promotes a fixed set of well-known fields to the top level and leaves everything else
+    under `fields`, so a field an app starts logging after this file was written is still readable here.
+    """
+    if key in line:
+        return line[key]
+    fields = line.get("fields")
+    if isinstance(fields, dict):
+        return fields.get(key)
+    return None
+
+
+def _clean(value):
+    """Normalise "absent" so a summary reports what is known instead of what defaulted to zero."""
+    return None if value in (None, "") else value
+
+
+def _by_msg(lines: list[dict], msg: str) -> dict:
+    for line in lines:
+        if line.get("msg") == msg:
+            return line
+    return {}
+
+
+def _all_msg(lines: list[dict], msg: str) -> list[dict]:
+    return [line for line in lines if line.get("msg") == msg]
+
+
+def _run_facts(lines: list[dict]) -> dict:
+    """How one unit of work ended and what it cost, from the lines that belong to it.
+
+    Shared by the run and sweep lookups so a company's outcome is derived the same way in both, rather
+    than one summary disagreeing with the other.
+    """
+    summary = _by_msg(lines, "summary")
+    skip = _by_msg(lines, "skip")
+    decided = _by_msg(lines, "agent decided")
+    agent_failed = _by_msg(lines, "agent failed")
+    blocked = _by_msg(lines, "listings page blocked")
+    finished = _by_msg(lines, "company finished")
+    stored = _all_msg(lines, "listing stored")
+    steps = _all_msg(lines, "agent step")
+
+    # Most specific evidence first: a run that failed to reach an answer is not "completed" merely
+    # because something later wrote a summary line.
+    if _by_msg(lines, "company failed"):
+        # The batch could not launch the scrape at all - an exec failure, a missing interpreter - which
+        # is a different problem from a scrape that ran and failed.
+        outcome = "failed_to_run"
+    elif agent_failed:
+        outcome = "agent_failed"
+    elif blocked or _field(summary, "blocked") is True:
+        outcome = "blocked"
+    elif skip:
+        # `reason` is an application field rather than one of the promoted ones, so it lives under
+        # `fields`. Reading it from the top level silently degraded every skip to the word "skipped",
+        # which loses the distinction that matters: no_remote_roles is a finding, robots_disallowed is
+        # a company we never actually looked at.
+        outcome = str(_field(skip, "reason") or "skipped")
+    elif stored:
+        outcome = "stored"
+    elif summary:
+        outcome = "completed"
+    else:
+        outcome = "in_progress"
+
+    reported = _field(decided, "agent_steps")
+    if not isinstance(reported, int):
+        reported = _field(agent_failed, "agent_steps")
+    agent_steps = len(steps) or (reported if isinstance(reported, int) else None)
+
+    return {
+        "outcome": outcome,
+        "agent_steps": agent_steps,
+        "agent_s": _clean(_field(summary, "agent_s") or _field(decided, "agent_s")),
+        "total_s": _clean(_field(summary, "total_s")),
+        "duration_ms": _clean(_field(finished, "duration_ms")),
+        "quality": _clean(_field(summary, "quality")),
+        "block_reason": _clean(_field(blocked, "block_reason") or _field(summary, "block_reason")),
+        "listings_stored": len(stored),
+        "listing_ids": [i for i in (_field(s, "listing_id") for s in stored) if i],
+    }
+
+
+def _summarise_run(run_id: int, lines: list[dict], span: timedelta) -> dict:
+    if not lines:
+        return {
+            "run_id": run_id,
+            "window": str(span),
+            "found": False,
+            "lines": 0,
+            "note": ("nothing for this run in the window - it may be older than the window, or older "
+                     "than the structured logging itself"),
+        }
+    start = _by_msg(lines, "start")
+    decided = _by_msg(lines, "agent decided")
+    fetched = _by_msg(lines, "fetch")
+    stale = _by_msg(lines, "stale")
+    facts = _run_facts(lines)
+    return {
+        "run_id": run_id,
+        "window": str(span),
+        "found": True,
+        "lines": len(lines),
+        "company": _clean(start.get("company") or _by_msg(lines, "summary").get("company")),
+        "sweep_id": _clean(start.get("sweep_id")),
+        "vendor": _clean(_field(start, "vendor")),
+        "listings_url": _clean(_field(decided, "listings_url") or _field(start, "listings_url")),
+        **facts,
+        "agent": {
+            "remote_confirmed": _field(decided, "remote_confirmed"),
+            "judged": _field(decided, "agent_judged"),
+            "judgement": _clean(_field(decided, "agent_judgement")),
+            "role_count": _clean(_field(decided, "role_count")),
+            "failed": _clean(_field(_by_msg(lines, "agent failed"), "error")),
+            "blocked": bool(_by_msg(lines, "listings page blocked")),
+        },
+        "postings": {
+            "extracted": _clean(_field(fetched, "extracted")),
+            "inserted": _clean(_field(_by_msg(lines, "summary"), "inserted")),
+            "refreshed": _clean(_field(_by_msg(lines, "summary"), "refreshed")),
+            "skipped_non_us": _clean(_field(_by_msg(lines, "summary"), "skipped_non_us")),
+            "closed": _clean(_field(stale, "closed")),
+        },
+        "step_urls": [_field(s, "url") for s in _all_msg(lines, "agent step")],
+        "errors": len([l for l in lines if str(l.get("level")) in ("error", "fatal")]),
+        "warnings": len([l for l in lines if str(l.get("level")) == "warn"]),
+        "timeline": lines,
+    }
+
+
+def _summarise_sweep(sweep_id: int, lines: list[dict], span: timedelta) -> dict:
+    if not lines:
+        return {"sweep_id": sweep_id, "window": str(span), "found": False, "lines": 0}
+    started = _by_msg(lines, "sweep started")
+    finished = _by_msg(lines, "sweep finished")
+    skipped = _all_msg(lines, "company skipped")
+
+    # Group by run_id, then re-attach the company's own batch lines.
+    #
+    # Grouping by `company` when a line had no run_id made phantom companies: `company started` is a
+    # batch-level line, so each one became its own "in_progress" row alongside the run it announced.
+    # The batch lines still belong to the company's story - `company finished` carries the duration and
+    # `company failed` means the scrape never launched - so they are attached rather than discarded.
+    by_run: dict[Any, list[dict]] = {}
+    for line in lines:
+        run_id = line.get("run_id")
+        if run_id is not None:
+            by_run.setdefault(run_id, []).append(line)
+
+    company_lines: dict[str, list[dict]] = {}
+    for line in lines:
+        if line.get("run_id") is None and line.get("msg") in (
+                "company started", "company finished", "company failed"):
+            company = line.get("company")
+            if company:
+                company_lines.setdefault(company, []).append(line)
+
+    groups: list[tuple[Any, list[dict]]] = []
+    attached: set[str] = set()
+    for run_id, group in by_run.items():
+        company = next((l.get("company") for l in group if l.get("company")), None)
+        extra = company_lines.get(company, []) if company else []
+        if company:
+            attached.add(company)
+        groups.append((run_id, group + extra))
+    # A company the batch started whose scrape produced no run at all: it failed before logging a start.
+    for company, group in company_lines.items():
+        if company not in attached:
+            groups.append((None, group))
+
+    rows = []
+    for run_id, group in groups:
+        facts = _run_facts(group)
+        start = _by_msg(group, "start")
+        rows.append({
+            "run_id": run_id,
+            "company": _clean(start.get("company") or group[0].get("company")),
+            "vendor": _clean(_field(start, "vendor")),
+            **{k: facts[k] for k in ("outcome", "agent_steps", "agent_s", "duration_ms", "quality",
+                                     "block_reason", "listings_stored")},
+        })
+    rows.sort(key=lambda row: (row["run_id"] is None, row["run_id"] or 0))
+
+    plan = {
+        "companies": _clean(_field(started, "companies")),
+        "candidates": _clean(_field(started, "candidates")),
+        "limit": _clean(_field(started, "limit")),
+        "skip_ok": _field(started, "skip_ok"),
+        "skip_traced": _field(started, "skip_traced"),
+        "from_slug": _clean(_field(started, "from_slug")),
+    }
+    outcomes: dict[str, int] = {}
+    for row in rows:
+        outcomes[row["outcome"]] = outcomes.get(row["outcome"], 0) + 1
+    return {
+        "sweep_id": sweep_id,
+        "window": str(span),
+        "found": True,
+        "lines": len(lines),
+        "plan": plan,
+        "skipped_before_starting": [
+            {"company": s.get("company"), "reason": _field(s, "reason")} for s in skipped
+        ],
+        "companies": rows,
+        "outcomes": outcomes,
+        "finished": {
+            "ok": _clean(_field(finished, "ok")),
+            "failed": _clean(_field(finished, "failed")),
+            "skipped": _clean(_field(finished, "skipped")),
+            "stopped_early": _field(finished, "stopped_early"),
+        } if finished else None,
+        "errors": len([l for l in lines if str(l.get("level")) in ("error", "fatal")]),
+    }
+
+
+def _summarise_company(company: str, lines: list[dict], span: timedelta) -> dict:
+    if not lines:
+        return {"company": company, "window": str(span), "found": False, "lines": 0,
+                "note": "no lines for this company in the window"}
+    by_run: dict[Any, list[dict]] = {}
+    for line in lines:
+        key = line.get("run_id")
+        if key is None:
+            continue
+        by_run.setdefault(key, []).append(line)
+
+    rows = []
+    for run_id, group in by_run.items():
+        facts = _run_facts(group)
+        start = _by_msg(group, "start")
+        rows.append({
+            "run_id": run_id,
+            "sweep_id": _clean(start.get("sweep_id")),
+            "at": group[0].get("ts"),
+            "vendor": _clean(_field(start, "vendor")),
+            **{k: facts[k] for k in ("outcome", "agent_steps", "agent_s", "total_s", "quality",
+                                     "block_reason")},
+        })
+    rows.sort(key=lambda row: (row["at"] or "", row["run_id"] or 0), reverse=True)
+    outcomes: dict[str, int] = {}
+    for row in rows:
+        outcomes[row["outcome"]] = outcomes.get(row["outcome"], 0) + 1
+    return {
+        "company": company,
+        "window": str(span),
+        "found": True,
+        "lines": len(lines),
+        "runs": len(rows),
+        "outcomes": outcomes,
+        "history": rows,
+        "errors": len([l for l in lines if str(l.get("level")) in ("error", "fatal")]),
+    }
+
+
+def _summarise_listing(listing_id: int, lines: list[dict], span: timedelta) -> dict:
+    if not lines:
+        return {"listing_id": listing_id, "window": str(span), "found": False, "lines": 0,
+                "note": ("nothing references this listing yet - jobs-app logs 'listing stored' when it "
+                         "saves one, and apply-app must log listing_id for its side to appear")}
+    stored = _all_msg(lines, "listing stored")
+    # Keyed on the event rather than on an app field: the field can be absent on a line that is still
+    # relevant (a non-JSON line, or an app that has not adopted it yet), and then a real application
+    # would be filed as a discovery.
+    applications = [l for l in lines if l.get("msg") != "listing stored"]
+    first = stored[0] if stored else lines[0]
+    return {
+        "listing_id": listing_id,
+        "window": str(span),
+        "found": True,
+        "lines": len(lines),
+        "company": _clean(first.get("company")),
+        "title": _clean(_field(first, "title")),
+        "url": _clean(_field(first, "url")),
+        "is_remote": _field(first, "is_remote"),
+        "discovered": [
+            {"at": s.get("ts"), "run_id": s.get("run_id"), "company": s.get("company"),
+             "is_new": _field(s, "is_new")}
+            for s in stored
+        ],
+        "applications": [
+            {"at": a.get("ts"), "app": a.get("app"), "msg": a.get("msg"), "run_id": a.get("run_id")}
+            for a in applications
+        ],
+        "timeline": lines,
+    }
 
 
 def streams_to_lines(body: dict, limit: int = 200) -> list[dict]:
@@ -319,8 +627,9 @@ class LogKit:
         if not re.fullmatch(r"[0-9a-f]{32}", trace_id):
             raise LogKitError(f"trace_id must be 32 lowercase hex characters, got {trace_id!r}")
         span = parse_window(window)
-        # trace_id is structured metadata, so it is filtered after parsing rather than being a label.
-        query = f'{{app=~".+"}} | json | trace_id="{trace_id}"'
+        # trace_id is structured metadata: filterable without `| json`, so the store applies it against
+        # the index rather than this parsing every line in the window to find one id.
+        query = f'{{app=~".+"}} | trace_id = {_logql_string(trace_id)}'
         body = self.loki.query_range(query, span, limit=limit, direction="forward")
         lines = [parsed_line(entry) for entry in streams_to_lines(body, limit=limit)]
 
@@ -426,3 +735,64 @@ class LogKit:
             "containers": containers,
             "note": "reads log lines, so it sees a container reporting a problem, not one killed silently",
         }
+
+    # ------------------------------------------------------------------ lookups by key
+
+    def _metadata_lines(self, key: str, value: str, window: str, limit: int) -> tuple[list[dict], timedelta]:
+        """Lines matching one structured-metadata key, oldest first.
+
+        Filtered by the store rather than with `| json`, because these fields are structured metadata:
+        the filter is applied against the index instead of parsing every line in the window. That is what
+        makes a lookup cheap enough to run while a sweep is in progress, and it is why a lookup does not
+        silently depend on the line being valid JSON.
+        """
+        span = parse_window(window)
+        selector = f'{{app=~".+"}} | {key} = {_logql_string(value)}'
+        body = self.loki.query_range(selector, span, limit=limit, direction="forward")
+        return [parsed_line(entry) for entry in streams_to_lines(body, limit=limit)], span
+
+    def run_timeline(self, run_id: int, window: str = "7d", limit: int = 500) -> dict:
+        """Everything one run did, in order, with the numbers that explain it.
+
+        A run is one company's scrape - or one application, once apply-app logs these fields - and it
+        spans three processes: the batch that chose it, the scrape that performed it, and the agent
+        whose every step is logged. The summary is what you would otherwise reconstruct by hand.
+        """
+        if not isinstance(run_id, int) or run_id <= 0:
+            raise LogKitError(f"run_id must be a positive integer, got {run_id!r}")
+        lines, span = self._metadata_lines("run_id", str(run_id), window, limit)
+        return _summarise_run(run_id, lines, span)
+
+    def sweep_timeline(self, sweep_id: int, window: str = "7d", limit: int = 3000) -> dict:
+        """One sweep: what it planned, which companies it skipped before starting and why, and how each
+        company it did run turned out. The per-company rows are the point - a sweep is a batch, and the
+        question is almost always 'which ones failed, and were they the same ones as last time'."""
+        if not isinstance(sweep_id, int) or sweep_id <= 0:
+            raise LogKitError(f"sweep_id must be a positive integer, got {sweep_id!r}")
+        lines, span = self._metadata_lines("sweep_id", str(sweep_id), window, limit)
+        return _summarise_sweep(sweep_id, lines, span)
+
+    def company_history(self, company: str, window: str = "30d", limit: int = 3000) -> dict:
+        """Every run for one company, newest first.
+
+        The shape is per-run rows rather than a timeline, because the question is usually whether this
+        company behaves the same way every time or something changed - a company that times out on every
+        sweep is a different problem from one that failed once.
+        """
+        company = (company or "").strip()
+        if not company:
+            raise LogKitError("company must be a non-empty company slug")
+        lines, span = self._metadata_lines("company", company, window, limit)
+        return _summarise_company(company, lines, span)
+
+    def listing_story(self, listing_id: int, window: str = "30d", limit: int = 500) -> dict:
+        """One job listing across apps: where it was found, and every application made from it.
+
+        This is the cross-app join. jobs-app logs `listing stored` with the id, and apply-app stores and
+        logs the same listing_id, so one query spans both - which works only because the two agree on the
+        field name and on what the id means.
+        """
+        if not isinstance(listing_id, int) or listing_id <= 0:
+            raise LogKitError(f"listing_id must be a positive integer, got {listing_id!r}")
+        lines, span = self._metadata_lines("listing_id", str(listing_id), window, limit)
+        return _summarise_listing(listing_id, lines, span)

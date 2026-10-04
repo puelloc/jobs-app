@@ -145,6 +145,84 @@ TOOLS: list[dict] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "run_timeline",
+        "description": (
+            "Everything one run did, in order, with the numbers that explain it: the company, the "
+            "vendor, how it ended (stored / no_remote_roles / robots_disallowed / listings_none / "
+            "blocked / agent_failed), the agent's step count and duration, the phase timings, and how "
+            "many listings it stored. A run is one company's scrape - or one application, once "
+            "apply-app logs these fields. Use this to answer 'why did this one company fail'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "integer", "description": "The scrape_runs id, e.g. 630."},
+                "window": WINDOW,
+                "limit": {"type": "integer", "default": 500},
+            },
+            "required": ["run_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "sweep_timeline",
+        "description": (
+            "One sweep: what it planned (companies, limit, which skip rules were on), which companies "
+            "it skipped before starting and why, and a row per company it ran with that company's "
+            "outcome, step count and duration. Answers 'which companies failed, and were they the same "
+            "ones as last time'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "sweep_id": {"type": "integer", "description": "The batch run id, e.g. 629."},
+                "window": WINDOW,
+                "limit": {"type": "integer", "default": 3000},
+            },
+            "required": ["sweep_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "company_history",
+        "description": (
+            "Every run for one company, newest first, with each run's outcome, agent steps, duration "
+            "and quality field, plus a tally of outcomes. Answers 'does this company behave the same "
+            "way every time, or did something change' - a company that times out on every sweep is a "
+            "different problem from one that failed once."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company": {"type": "string", "description": "Company slug, e.g. abbott-laboratories."},
+                "window": {"type": "string", "default": "30d",
+                           "description": "Relative window, e.g. 30d. Defaults to 30d, not 24h."},
+                "limit": {"type": "integer", "default": 3000},
+            },
+            "required": ["company"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "listing_story",
+        "description": (
+            "One job listing across apps: the scrape that discovered it, and every application made "
+            "from it. This is the cross-app join between jobs-app and apply-app, and it works because "
+            "both log the same listing_id. Answers 'what happened to this job, from found to applied'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "listing_id": {"type": "integer", "description": "jobs-app job_listings.id."},
+                "window": {"type": "string", "default": "30d",
+                           "description": "Relative window. Defaults to 30d, not 24h."},
+                "limit": {"type": "integer", "default": 500},
+            },
+            "required": ["listing_id"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 TOOL_NAMES = {tool["name"] for tool in TOOLS}
@@ -194,12 +272,48 @@ def tool_container_health(arguments: dict) -> dict:
     )
 
 
+def tool_run_timeline(arguments: dict) -> dict:
+    return _kit().run_timeline(
+        int(arguments["run_id"]),
+        window=arguments.get("window") or "7d",
+        limit=int(arguments.get("limit") or 500),
+    )
+
+
+def tool_sweep_timeline(arguments: dict) -> dict:
+    return _kit().sweep_timeline(
+        int(arguments["sweep_id"]),
+        window=arguments.get("window") or "7d",
+        limit=int(arguments.get("limit") or 3000),
+    )
+
+
+def tool_company_history(arguments: dict) -> dict:
+    return _kit().company_history(
+        str(arguments["company"]),
+        window=arguments.get("window") or "30d",
+        limit=int(arguments.get("limit") or 3000),
+    )
+
+
+def tool_listing_story(arguments: dict) -> dict:
+    return _kit().listing_story(
+        int(arguments["listing_id"]),
+        window=arguments.get("window") or "30d",
+        limit=int(arguments.get("limit") or 500),
+    )
+
+
 DISPATCH = {
     "status": tool_status,
     "error_summary": tool_error_summary,
     "trace_timeline": tool_trace_timeline,
     "search_logs": tool_search_logs,
     "container_health": tool_container_health,
+    "run_timeline": tool_run_timeline,
+    "sweep_timeline": tool_sweep_timeline,
+    "company_history": tool_company_history,
+    "listing_story": tool_listing_story,
 }
 
 

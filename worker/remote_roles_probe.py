@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import json
 import os
@@ -147,6 +148,29 @@ Rules:
   site. Do NOT apply to any job, do NOT log in, and do NOT create an account."""
 
 
+def _jsonable(value):
+    """A judgement that survives as an object rather than as an opaque string.
+
+    browser-use hands this over as a pydantic model, a dict, or - most often - a Python repr. A repr is
+    not JSON: single quotes and escaped quotes mean nothing downstream can parse it, so it reaches the
+    log store as one long unreadable string. Parsing it back is worth four lines, because this is the
+    field that flags "the right answer reached by a bad process".
+    """
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if isinstance(value, str):
+        text = value.strip()
+        if text[:1] in ("{", "["):
+            try:
+                return json.loads(text)
+            except ValueError:
+                try:
+                    return ast.literal_eval(text)
+                except (ValueError, SyntaxError):
+                    return value
+    return value
+
+
 def _steps_taken(agent) -> int:
     """How many steps the agent managed before it failed, when that is knowable.
 
@@ -246,10 +270,7 @@ async def run_one(url: str, company: str, host: str, model: str, max_steps: int,
         except Exception:  # noqa: BLE001
             judgement = None
     if judgement is not None:
-        if hasattr(judgement, "model_dump"):
-            judgement = judgement.model_dump()
-        else:
-            judgement = str(judgement)
+        judgement = _jsonable(judgement)
 
     # Cross-check the model's report against the words in its own evidence: a model that walked into a
     # CAPTCHA does not reliably set the field, and "blocked" mis-reported as "no openings" is the one
