@@ -69,8 +69,10 @@ Read-only. GET only; no POST, PUT, PATCH, or DELETE exists in v1. JSON in, JSON 
 
 | Method | Path | Query params | Response shape | Used by |
 | --- | --- | --- | --- | --- |
-| GET | `/api/jobs` | `limit` (default 25, max 100), `offset` (default 0) | List envelope: a `jobs` array of list items plus `limit`, `offset`, `total` | List route |
+| GET | `/api/jobs` | `limit` (default 25, max 100), `offset` (default 0), `status` (default `open`) | List envelope: a `jobs` array of list items plus `limit`, `offset`, `total`. `total` counts only the rows matching `status`. | List route |
 | GET | `/api/jobs/{id}` | none | One job object, the list item plus description and the three URLs | Detail route |
+
+**The default `status` filter is a contract, not a convenience.** `GET /api/jobs` returns only `open` rows unless told otherwise, and `total` follows the active filter so "load more" stays correct. The reason is the console: a row stays `open` until a later scrape proves the source dropped it, so an unfiltered default served dead listings alongside live ones and gave the client no way to exclude them. `status` accepts the schema's four values (`open`, `closed`, `filled`, `unknown`) or `all`, which applies no predicate; any other value is a `400`, so a typo cannot masquerade as an empty page. Client code written before this filter existed keeps working, but its result set shrinks to open rows — pass `?status=all` to get the old set back.
 
 **List envelope** (`total` is the count of matching rows and is not a job field; the UI may use it only to decide whether to offer "load more"):
 
@@ -115,13 +117,15 @@ Read-only. GET only; no POST, PUT, PATCH, or DELETE exists in v1. JSON in, JSON 
 
 | Route | Renders | Fetches from | Notes |
 | --- | --- | --- | --- |
-| `/` | List view | `GET /api/jobs?limit=25&offset=0` | Server-rendered. "Load more" requests the next offset client-side. |
+| `/` | List view | `GET /api/jobs?limit=25&offset=0&status=<status>` | Server-rendered. "Load more" requests the next offset client-side, carrying the same `status`. The filter defaults to `open` (see the API contract), so dead listings are excluded without being asked. |
 | `/jobs/{id}` | Detail view | `GET /api/jobs/{id}` | Server-rendered. A 404 from the API renders the not-found route. |
 | not-found route | "Page not found" / "Job not found" | nothing | Catches unknown paths and unknown job ids. |
 
 Server-rendered for both real routes: the content is in the first HTML response, which keeps a read-only viewer working without client-side fetching and matches how little the pages change. A job id that once existed but is now gone still resolves to a row (rows are never deleted), so the 404 path is for genuinely unknown ids.
 
 ## List view — what it shows
+
+- **Status filter** — a `Status` select (open / closed / filled / unknown / all statuses) submitted as `?status=`. `open` is the default, so the list shows live listings without being asked; "All statuses" restores the unfiltered set. The count in the heading and the "load more" paging both follow the active filter.
 
 Per row, in order:
 
@@ -135,7 +139,7 @@ Per row, in order:
 
 `description` is never shown in the list at any length: it is large, multi-line, possibly HTML, and belongs on the detail page only.
 
-- **Empty state** — when `total` is 0: "No jobs yet. Run the scraper, then reload this page." Nothing in the UI can start the scraper (see Deferred); the text is the whole remedy.
+- **Empty state** — when `total` is 0: "No `<status>` jobs to show. Try another status, or run a scrape." The text names both remedies because a zero can now mean "none live" as easily as "nothing scraped".
 - **Loading state** — a single-line "Loading jobs…" placeholder; no skeleton.
 - **Error state** — one line naming the failure plus a "Try again" link that re-requests the same URL; retrying is a read, not a mutation.
 

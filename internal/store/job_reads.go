@@ -125,7 +125,13 @@ func scanJob(s rowScanner) (JobRow, error) {
 }
 
 // ListJobs returns one page of jobs ordered by COALESCE(posted_at,
-// first_seen_at) DESC, id DESC, plus the total number of rows.
+// first_seen_at) DESC, id DESC, plus the total number of matching rows.
+//
+// status, when non-empty, restricts both the page and the total to rows carrying
+// that status. An empty status applies no predicate: it means "every status",
+// which is deliberately not the same as "open" - open is the HTTP layer's
+// default, chosen there so the console excludes dead listings while the store
+// stays a plain query builder.
 //
 // The count and the page are two separate reads rather than one transaction: a
 // single-user, read-only viewer has no writer racing it, and a torn count would
@@ -134,15 +140,24 @@ func scanJob(s rowScanner) (JobRow, error) {
 //
 // limit and offset are expected to be validated by the caller; they are bound
 // as parameters, never interpolated.
-func ListJobs(ctx context.Context, q Querier, limit, offset int) ([]JobRow, int64, error) {
+func ListJobs(ctx context.Context, q Querier, limit, offset int, status string) ([]JobRow, int64, error) {
+	where := ""
+	args := []any{}
+	if status != "" {
+		where = ` WHERE j.status = ?`
+		args = append(args, status)
+	}
+
 	var total int64
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_listings`).Scan(&total); err != nil {
+	if err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM job_listings j`+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("list jobs: count: %w", err)
 	}
 
-	rows, err := q.QueryContext(ctx, jobSelect+`
+	pageArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := q.QueryContext(ctx, jobSelect+where+`
 ORDER BY COALESCE(j.posted_at, j.first_seen_at) DESC, j.id DESC
-LIMIT ? OFFSET ?`, limit, offset)
+LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list jobs: select: %w", err)
 	}

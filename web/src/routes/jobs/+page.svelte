@@ -5,7 +5,7 @@
 	let { data } = $props();
 
 	// load() owns the first page; "load more" appends further pages client-side.
-	// No filters and no polling, so the initial values never go stale in place.
+	// No polling, so the initial values never go stale in place.
 	let jobs = $state(data.jobs ?? []);
 	let offset = $state(data.offset + (data.jobs?.length ?? 0));
 	let loadingMore = $state(false);
@@ -13,12 +13,15 @@
 
 	const total = $derived(data.total ?? 0);
 	const hasMore = $derived(offset < total);
+	// "3 open jobs" / "10 jobs": the count is always scoped by the active filter.
+	const scopeLabel = $derived(data.status === 'all' ? 'jobs' : `${data.status} jobs`);
 
 	async function loadMore() {
 		loadingMore = true;
 		loadError = '';
 		try {
-			const page = await getJobs({ limit: data.limit, offset });
+			// The status filter carries into paging, or page two would mix statuses.
+			const page = await getJobs({ limit: data.limit, offset, status: data.status });
 			jobs = [...jobs, ...(page.jobs ?? [])];
 			offset += page.jobs?.length ?? 0;
 		} catch (failure) {
@@ -37,11 +40,25 @@
 <main>
 	<div class="heading">
 		<h1>Jobs</h1>
-		<p class="sub">{total} jobs</p>
+		<p class="sub">{total} {scopeLabel}</p>
 	</div>
 
+	<form class="filters" method="get" action="/jobs">
+		<label>
+			<span>Status</span>
+			<select name="status">
+				<option value="open" selected={data.status === 'open'}>Open</option>
+				<option value="closed" selected={data.status === 'closed'}>Closed</option>
+				<option value="filled" selected={data.status === 'filled'}>Filled</option>
+				<option value="unknown" selected={data.status === 'unknown'}>Unknown</option>
+				<option value="all" selected={data.status === 'all'}>All statuses</option>
+			</select>
+		</label>
+		<button type="submit">Filter</button>
+	</form>
+
 	{#if jobs.length === 0}
-		<p class="empty">No jobs yet. Run the scraper, then reload this page.</p>
+		<p class="empty">No {scopeLabel} to show. Try another status, or run a scrape.</p>
 	{:else}
 		<ul class="job-list">
 			{#each jobs as job (job.id)}
@@ -108,6 +125,51 @@
 		margin: 0;
 		color: #6b7178;
 		font-size: 0.9rem;
+	}
+
+	.filters {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-end;
+		gap: 0.75rem;
+		margin-bottom: 1.25rem;
+		padding: 0.85rem 0.9rem;
+		background: #ffffff;
+		border: 1px solid #e4e7ec;
+		border-radius: 8px;
+	}
+
+	.filters label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+
+	.filters label span {
+		font-size: 0.72rem;
+		font-weight: 650;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		color: #6b7178;
+	}
+
+	.filters select {
+		font: inherit;
+		padding: 0.35rem 0.5rem;
+		border: 1px solid #d4d9e0;
+		border-radius: 6px;
+		background: #ffffff;
+		color: #171b21;
+	}
+
+	.filters button {
+		font: inherit;
+		padding: 0.35rem 0.9rem;
+		border: 1px solid #1a56c4;
+		border-radius: 6px;
+		background: #1a56c4;
+		color: #ffffff;
+		cursor: pointer;
 	}
 
 	.job-list {

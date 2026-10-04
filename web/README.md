@@ -19,11 +19,13 @@ SvelteKit dashboard over the Go API. Six screens:
   filters for `resolution`, `index`, and `search`. The detail page shows the company's facts, every
   `url_resolution_attempts` row (accepted and rejected alike), and the **Scrape** button that
   triggers one company's listings scrape (disabled until the company is classified).
-- **Jobs** at `/jobs` and `/jobs/[id]` — the scraped job listings, with a per-job page showing the
-  description (rendered as escaped plain text, never as HTML, capped to a scrollable box) and the
-  listing/application/discovery URLs. When a job is linked to the scrape run that produced it, the
-  page also shows a **"Why this job matched"** section with that run's agent trace, so a posting that
-  is not really a software-engineering role can be traced to the reasoning that admitted it.
+- **Jobs** at `/jobs` and `/jobs/[id]` — the scraped job listings, with a **Status** filter (open by
+  default, matching the API's default; "All statuses" shows closed and filled listings too) and a
+  per-job page showing the description (rendered as escaped plain text, never as HTML, capped to a
+  scrollable box) and the listing/application/discovery URLs. When a job is linked to the scrape run
+  that produced it, the page also shows a **"Why this job matched"** section with that run's agent
+  trace, so a posting that is not really a software-engineering role can be traced to the reasoning
+  that admitted it.
 - **Logs** at `/logs` — the tail of the Go API server's own log, where self-tracked jobs stream their
   per-company progress. Shown **newest-first and paginated** (200 lines per page, "Show older" to page
   back).
@@ -94,7 +96,7 @@ build locally.
 | `GET /api/companies` | **yes** — the company directory (`/companies`) |
 | `GET /api/companies/{id}` | **yes** — a company + its resolution trail (`/companies/{id}`) |
 | `GET /api/companies/churn` | no — no screen yet |
-| `GET /api/jobs` | **yes** — the jobs list (`/jobs`) |
+| `GET /api/jobs` | **yes** — the jobs list (`/jobs`); accepts `?status=` (`open` by default, `all` for every status) |
 | `GET /api/jobs/{id}` | **yes** — a job's detail (`/jobs/{id}`) |
 
 ## Layout

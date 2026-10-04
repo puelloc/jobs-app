@@ -243,18 +243,24 @@ func jobTitles(jobs []jobJSON) []string {
 
 // --- list endpoint ---------------------------------------------------------
 
-func TestListJobs_ReturnsAllWithEnvelope(t *testing.T) {
+// The documented default is status=open, so the fixture's closed job 3 is excluded unless asked for.
+func TestListJobs_DefaultsToOpenOnly(t *testing.T) {
 	rec := do(t, newTestServer(t), http.MethodGet, "/api/jobs")
 
 	requireStatus(t, rec, http.StatusOK)
 	requireJSON(t, rec)
 
 	got := decodeList(t, rec)
-	if got.Total != 3 {
-		t.Errorf("total = %d, want 3", got.Total)
+	if got.Total != 2 {
+		t.Errorf("total = %d, want 2 (the closed row is excluded by default)", got.Total)
 	}
-	if len(got.Jobs) != 3 {
-		t.Fatalf("len(jobs) = %d, want 3 (body: %s)", len(got.Jobs), rec.Body.String())
+	if len(got.Jobs) != 2 {
+		t.Fatalf("len(jobs) = %d, want 2 (body: %s)", len(got.Jobs), rec.Body.String())
+	}
+	for _, j := range got.Jobs {
+		if j.Status != "open" {
+			t.Errorf("job %d status = %q, want only open rows by default", j.ID, j.Status)
+		}
 	}
 	if got.Limit != 25 {
 		t.Errorf("limit = %d, want the documented default 25", got.Limit)
@@ -264,12 +270,51 @@ func TestListJobs_ReturnsAllWithEnvelope(t *testing.T) {
 	}
 }
 
+func TestListJobs_StatusAllIncludesClosed(t *testing.T) {
+	rec := do(t, newTestServer(t), http.MethodGet, "/api/jobs?status=all")
+	requireStatus(t, rec, http.StatusOK)
+
+	got := decodeList(t, rec)
+	if got.Total != 3 || len(got.Jobs) != 3 {
+		t.Errorf("status=all -> total %d, %d rows; want all 3", got.Total, len(got.Jobs))
+	}
+}
+
+// The count must respect the filter too, not just the page: closed has exactly one row, so a total of
+// 1 is what proves the WHERE reached the COUNT(*) as well as the page query.
+func TestListJobs_StatusClosedReturnsOnlyClosed(t *testing.T) {
+	rec := do(t, newTestServer(t), http.MethodGet, "/api/jobs?status=closed")
+	requireStatus(t, rec, http.StatusOK)
+
+	got := decodeList(t, rec)
+	if got.Total != 1 {
+		t.Errorf("total = %d, want 1 (the filtered count)", got.Total)
+	}
+	if len(got.Jobs) != 1 || got.Jobs[0].ID != 3 {
+		t.Errorf("status=closed -> %v, want exactly job 3", got.Jobs)
+	}
+}
+
+func TestListJobs_StatusIsCaseInsensitive(t *testing.T) {
+	rec := do(t, newTestServer(t), http.MethodGet, "/api/jobs?status=CLOSED")
+	requireStatus(t, rec, http.StatusOK)
+	if got := decodeList(t, rec).Total; got != 1 {
+		t.Errorf("status=CLOSED total = %d, want 1", got)
+	}
+}
+
+func TestListJobs_RejectsUnknownStatus(t *testing.T) {
+	rec := do(t, newTestServer(t), http.MethodGet, "/api/jobs?status=bogus")
+	requireError(t, rec, http.StatusBadRequest, "bad_request")
+}
+
 func TestListJobs_SortsByPostedOrFirstSeenDesc(t *testing.T) {
 	rec := do(t, newTestServer(t), http.MethodGet, "/api/jobs")
 	requireStatus(t, rec, http.StatusOK)
 
 	got := decodeList(t, rec)
-	want := []int64{2, 3, 1}
+	// Open rows only (the default): job 2 sorts newest, then job 1.
+	want := []int64{2, 1}
 	if len(got.Jobs) != len(want) {
 		t.Fatalf("len(jobs) = %d, want %d", len(got.Jobs), len(want))
 	}
@@ -301,8 +346,8 @@ func TestListJobs_LimitReturnsOneAndKeepsTotal(t *testing.T) {
 	if got.Jobs[0].ID != 2 {
 		t.Errorf("jobs[0].id = %d, want 2 (the newest row)", got.Jobs[0].ID)
 	}
-	if got.Total != 3 {
-		t.Errorf("total = %d, want 3 (the count is independent of the page)", got.Total)
+	if got.Total != 2 {
+		t.Errorf("total = %d, want 2 (the count is independent of the page, but follows the status filter)", got.Total)
 	}
 	if got.Limit != 1 {
 		t.Errorf("limit = %d, want the requested 1", got.Limit)
@@ -317,8 +362,8 @@ func TestListJobs_HonorsOffset(t *testing.T) {
 	if len(got.Jobs) != 1 {
 		t.Fatalf("len(jobs) = %d, want 1", len(got.Jobs))
 	}
-	if got.Jobs[0].ID != 3 {
-		t.Errorf("jobs[0].id = %d, want 3 (the middle row)", got.Jobs[0].ID)
+	if got.Jobs[0].ID != 1 {
+		t.Errorf("jobs[0].id = %d, want 1 (the second open row; job 3 is closed and filtered out)", got.Jobs[0].ID)
 	}
 	if got.Offset != 1 {
 		t.Errorf("offset = %d, want the requested 1", got.Offset)
@@ -386,12 +431,17 @@ func TestListJobs_IsRemoteIsBool(t *testing.T) {
 }
 
 func TestListJobs_NullableColumnsAreNull(t *testing.T) {
-	rec := do(t, newTestServer(t), http.MethodGet, "/api/jobs")
+	// status=all: job 3 is closed, and this test is about null columns, not the status filter, so it
+	// needs every row present.
+	rec := do(t, newTestServer(t), http.MethodGet, "/api/jobs?status=all")
 	requireStatus(t, rec, http.StatusOK)
 
 	byID := map[int64]jobJSON{}
 	for _, j := range decodeList(t, rec).Jobs {
 		byID[j.ID] = j
+	}
+	if _, ok := byID[3]; !ok {
+		t.Fatal("job 3 missing; status=all must include the closed row")
 	}
 
 	job2 := byID[2]

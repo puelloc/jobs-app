@@ -281,6 +281,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	extPattern := externalIDPattern(*vendor)
 
+	// The observed set is what the company's board currently advertises: every posting this run found
+	// linked on the listings page, keyed the way job_listings is (vendor platform + external_id). It
+	// deliberately includes postings this run did not store - non-US ones, and ones whose detail page
+	// failed to render - because those are still advertised, and staleness is about what the board no
+	// longer offers. It mirrors the RemoteOK path, which extracts an element's identifier before
+	// decoding the rest of the element so a partly-broken element is never mistaken for an absent one.
+	observed := make(map[string]struct{}, len(fetched.Jobs))
+	for _, j := range fetched.Jobs {
+		if j.URL != "" {
+			observed[store.ExternalID(extPattern, j.URL)] = struct{}{}
+		}
+	}
+
 	// 3. Store: upsert the US postings (the deterministic US-only filter).
 	inserted, refreshed, skipped := 0, 0, 0
 	for _, j := range fetched.Jobs {
@@ -315,9 +328,37 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// 4. Stale-mark: close this company's postings on this vendor that the board no longer advertises,
+	// so a dropped posting does not stay 'open' forever. Two guards keep a partial observation from
+	// closing postings that are still live: an empty observed set closes nothing, and a run that hit
+	// the -max-jobs cap saw only part of the board, so "not observed" there is not evidence of absence.
+	// The residual limitation is the board's own rendering: a listings page that shows only its first
+	// page of results looks identical to a complete one from here, so the closure is only as complete
+	// as the page the agent landed on. Detecting that needs a completeness signal from the board (its
+	// own posted result count) rather than another guard.
+	closed := int64(0)
+	staleNote := ""
+	switch {
+	case len(observed) == 0:
+		staleNote = "none_observed"
+	case len(fetched.Jobs) >= *maxJobs:
+		staleNote = fmt.Sprintf("truncated_at_max_jobs=%d", *maxJobs)
+	default:
+		closed, err = store.MarkCompanyJobsStale(ctx, database, company.ID, jobPlatformID, observed)
+		if err != nil {
+			finish("error", int64(inserted+refreshed+skipped), int64(inserted), int64(refreshed), fmt.Sprintf("stale: %v", err))
+			fmt.Fprintf(stderr, "scrape: stale %s: %v\n", company.Slug, err)
+			return 1
+		}
+	}
+
 	finish("ok", int64(inserted+refreshed+skipped), int64(inserted), int64(refreshed), "")
-	fmt.Fprintf(stdout, "run_id=%d company=%s listings=%s found=%d inserted=%d refreshed=%d skipped=%d\n",
-		runID, company.Slug, probe.Answer.ListingsURL, len(fetched.Jobs), inserted, refreshed, skipped)
+	fmt.Fprintf(stdout, "run_id=%d company=%s listings=%s found=%d inserted=%d refreshed=%d skipped=%d closed=%d",
+		runID, company.Slug, probe.Answer.ListingsURL, len(fetched.Jobs), inserted, refreshed, skipped, closed)
+	if staleNote != "" {
+		fmt.Fprintf(stdout, " stale=skipped reason=%s", staleNote)
+	}
+	fmt.Fprintln(stdout)
 	return 0
 }
 

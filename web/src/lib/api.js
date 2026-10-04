@@ -126,13 +126,17 @@ export async function getCompany(id, options = {}) {
 }
 
 /**
- * One page of jobs plus the envelope's total.
- * @param {{ limit?: number, offset?: number }} [paging]
+ * One page of jobs plus the envelope's total. `status` is the API's status filter
+ * (default "open"; "all" means every status), so a caller that omits it gets live
+ * listings only.
+ * @param {{ limit?: number, offset?: number, status?: string }} [paging]
  * @param {{ origin?: string }} [options]
  * @returns {Promise<{ jobs: any[], limit: number, offset: number, total: number }>}
  */
-export async function getJobs({ limit = 25, offset = 0 } = {}, options = {}) {
-	return getJSON(`/api/jobs?limit=${limit}&offset=${offset}`, options);
+export async function getJobs({ limit = 25, offset = 0, status = '' } = {}, options = {}) {
+	const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+	if (status) query.set('status', status);
+	return getJSON(`/api/jobs?${query.toString()}`, options);
 }
 
 /**

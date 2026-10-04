@@ -114,6 +114,14 @@ The browser-use agent uses the `qwen38-q3-64k:latest` Ollama model by default (a
 lower VRAM and faster inference). Override it per deploy with the `BROWSER_USE_MODEL` environment
 variable on the `app` service.
 
+When a listings scrape finishes successfully, it closes that company's postings on that vendor which
+the board no longer advertises (`status='closed'`), and a posting that reappears is reopened — so a
+dropped listing stops looking live. Both paths share one implementation (`store.MarkJobsStale`); the
+listings path narrows it by company, because many companies share one vendor platform. Two guards
+keep a partial observation from closing live postings: an empty observed set closes nothing, and a
+run that hit the scrape's `-max-jobs` cap is treated as partial and skips the close. `GET /api/jobs`
+therefore defaults to `?status=open`; pass `?status=all` to see every status.
+
 The UI talks to the API over the compose network (it proxies `/api/*` to `app:8080`); it does not
 need the API host port exposed, which is kept for direct `curl` use.
 

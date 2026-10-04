@@ -3,9 +3,130 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 )
+
+// seedTwoCompaniesOnOneVendor inserts two companies that share the eightfold vendor platform (31).
+// The per-company listings scrape keys its postings by that vendor, so this is the shape that makes
+// company-scoped stale-marking necessary rather than merely tidy.
+func seedTwoCompaniesOnOneVendor(t *testing.T, database *sql.DB) {
+	t.Helper()
+	for _, c := range []struct {
+		id         int64
+		slug, name string
+	}{{1, "alpha", "Alpha"}, {2, "beta", "Beta"}} {
+		if _, err := database.Exec(
+			`INSERT INTO companies (id, slug, name) VALUES (?, ?, ?)`, c.id, c.slug, c.name); err != nil {
+			t.Fatalf("seed company %s: %v", c.slug, err)
+		}
+	}
+}
+
+// insertBrowserJob writes one posting for a company on vendor platform 31 and returns its row id.
+func insertBrowserJob(t *testing.T, database *sql.DB, companyID int64, externalID string) int64 {
+	t.Helper()
+	job := BrowserJob{
+		ExternalID: externalID,
+		ListingURL: "https://jobs.example.test/job/" + externalID,
+		Title:      "Engineer " + externalID,
+	}
+	id, _, err := UpsertBrowserJob(context.Background(), database, job, companyID, 31, nil)
+	if err != nil {
+		t.Fatalf("UpsertBrowserJob %s: %v", externalID, err)
+	}
+	return id
+}
+
+// TestMarkCompanyJobsStale_ClosesOnlyThatCompanyOnTheVendor is the scoping test: two companies share
+// one vendor platform, so a company-scoped closure must leave the sibling company's postings alone.
+func TestMarkCompanyJobsStale_ClosesOnlyThatCompanyOnTheVendor(t *testing.T) {
+	database := newTestDB(t)
+	ctx := context.Background()
+	seedTwoCompaniesOnOneVendor(t, database)
+
+	alphaKept := insertBrowserJob(t, database, 1, "alpha-1")
+	alphaDropped := insertBrowserJob(t, database, 1, "alpha-2")
+	betaKept := insertBrowserJob(t, database, 2, "beta-1")
+
+	closed, err := MarkCompanyJobsStale(ctx, database, 1, 31, map[string]struct{}{"alpha-1": {}})
+	if err != nil {
+		t.Fatalf("MarkCompanyJobsStale: %v", err)
+	}
+	if closed != 1 {
+		t.Errorf("closed = %d, want 1 (only alpha-2 was unseen)", closed)
+	}
+
+	for id, want := range map[int64]string{
+		alphaKept:    "open",
+		alphaDropped: "closed",
+		betaKept:     "open", // same vendor, different company: untouched
+	} {
+		if got := readJobRow(t, database, id).status; got != want {
+			t.Errorf("job %d status = %q, want %q", id, got, want)
+		}
+	}
+}
+
+// design: Freshness contract / Reappearance - a closed posting is reopened by the next run that
+// observes it, keeping its original first_seen_at. Mirrors TestUpsertJobReopensAClosedRow.
+func TestMarkCompanyJobsStale_ReopensOnReobservation(t *testing.T) {
+	database := newTestDB(t)
+	ctx := context.Background()
+	seedTwoCompaniesOnOneVendor(t, database)
+
+	id := insertBrowserJob(t, database, 1, "alpha-1")
+	first := readJobRow(t, database, id)
+
+	closed, err := MarkCompanyJobsStale(ctx, database, 1, 31, map[string]struct{}{"never-seen": {}})
+	if err != nil {
+		t.Fatalf("MarkCompanyJobsStale: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("closed = %d, want 1", closed)
+	}
+	if got := readJobRow(t, database, id).status; got != "closed" {
+		t.Fatalf("status = %q after stale-marking, want closed", got)
+	}
+
+	if _, _, err := UpsertBrowserJob(ctx, database, BrowserJob{
+		ExternalID: "alpha-1",
+		ListingURL: "https://jobs.example.test/job/alpha-1",
+		Title:      "Engineer alpha-1",
+	}, 1, 31, nil); err != nil {
+		t.Fatalf("re-observation: %v", err)
+	}
+
+	reopened := readJobRow(t, database, id)
+	if reopened.status != "open" {
+		t.Errorf("status = %q after re-observation, want open", reopened.status)
+	}
+	if reopened.firstSeenAt != first.firstSeenAt {
+		t.Errorf("first_seen_at = %q, want the original %q preserved across the cycle",
+			reopened.firstSeenAt, first.firstSeenAt)
+	}
+}
+
+// design: Freshness contract / "Two guards" - an empty observed set must not close a company's board.
+func TestMarkCompanyJobsStale_EmptySeenSetClosesNothing(t *testing.T) {
+	database := newTestDB(t)
+	ctx := context.Background()
+	seedTwoCompaniesOnOneVendor(t, database)
+
+	id := insertBrowserJob(t, database, 1, "alpha-1")
+
+	closed, err := MarkCompanyJobsStale(ctx, database, 1, 31, map[string]struct{}{})
+	if err != nil {
+		t.Fatalf("MarkCompanyJobsStale with an empty seen set: %v", err)
+	}
+	if closed != 0 {
+		t.Errorf("closed = %d, want 0", closed)
+	}
+	if got := readJobRow(t, database, id).status; got != "open" {
+		t.Errorf("status = %q after an empty seen set, want open", got)
+	}
+}
 
 func TestUpsertBrowserJob_InsertsThenRefreshes(t *testing.T) {
 	database := newTestDB(t)

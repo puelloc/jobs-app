@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"jobsapp/internal/store"
@@ -40,6 +41,9 @@ const (
 )
 
 // handleListJobs serves GET /api/jobs.
+//
+// The status filter defaults to "open", so the default result set excludes dead listings. Pass
+// ?status=all to see every status, or one of the schema's four statuses to narrow to it.
 func handleListJobs(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit, err := intQueryParam(r, "limit", defaultLimit)
@@ -63,7 +67,13 @@ func handleListJobs(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		rows, total, err := store.ListJobs(r.Context(), db, limit, offset)
+		status, err := jobStatusParam(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
+			return
+		}
+
+		rows, total, err := store.ListJobs(r.Context(), db, limit, offset, status)
 		if err != nil {
 			writeInternalError(w, err)
 			return
@@ -125,6 +135,36 @@ func handleGetJob(db *sql.DB) http.HandlerFunc {
 			DiscoveryURL:   nullableString(row.DiscoveryURL),
 			RunID:          nullableInt64(row.ScrapeRunID),
 		})
+	}
+}
+
+// defaultJobStatus is the documented default for GET /api/jobs: live listings only. It is the one
+// filter the API applies without being asked, chosen so the console does not show dead postings
+// unless it opts in.
+const defaultJobStatus = "open"
+
+// jobStatuses is the set job_listings.status allows (the schema's CHECK), used to validate input so a
+// typo is a 400 rather than a silently empty page.
+var jobStatuses = map[string]bool{
+	"open":    true,
+	"closed":  true,
+	"filled":  true,
+	"unknown": true,
+}
+
+// jobStatusParam resolves GET /api/jobs's `status` filter. Absent means the documented default
+// (defaultJobStatus); "all" means "no predicate"; anything else must be a status the schema allows.
+func jobStatusParam(r *http.Request) (string, error) {
+	raw := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	switch {
+	case raw == "":
+		return defaultJobStatus, nil
+	case raw == "all":
+		return "", nil
+	case jobStatuses[raw]:
+		return raw, nil
+	default:
+		return "", fmt.Errorf("status must be one of open, closed, filled, unknown, or all")
 	}
 }
 

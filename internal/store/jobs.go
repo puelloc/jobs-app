@@ -162,6 +162,28 @@ func UpsertJob(ctx context.Context, q Querier, j remoteok.NormalizedJob, company
 // never close the whole board, so it reports zero closures without running the
 // UPDATE.
 func MarkJobsStale(ctx context.Context, q Querier, discoveryPlatformID int64, seenIDs map[string]struct{}) (int64, error) {
+	return markJobsStale(ctx, q, discoveryPlatformID, nil, seenIDs)
+}
+
+// MarkCompanyJobsStale closes one company's rows on a discovery platform that the company's latest
+// listings scrape did not see, and is what keeps a dropped posting from staying 'open' forever.
+//
+// It is MarkJobsStale narrowed by company_id, and that narrowing is load-bearing: the per-company
+// listings scrape keys its postings by the company's applicant-tracking vendor
+// (discovery_platform_id), and many companies share one vendor, so a platform-wide sweep here would
+// close every other company's postings on that vendor.
+//
+// The semantics are MarkJobsStale's: closure is set membership, never a clock; only rows currently
+// 'open' are touched; an empty seen set closes nothing; and a posting that reappears is reopened by
+// the next upsert, which sets status back to 'open'.
+func MarkCompanyJobsStale(ctx context.Context, q Querier, companyID, discoveryPlatformID int64, seenIDs map[string]struct{}) (int64, error) {
+	return markJobsStale(ctx, q, discoveryPlatformID, &companyID, seenIDs)
+}
+
+// markJobsStale is the one implementation behind both entry points above. A nil companyID scopes the
+// closure to the whole discovery platform (the RemoteOK board, which has no per-company rows); a
+// non-nil one scopes it to that company's postings on the platform.
+func markJobsStale(ctx context.Context, q Querier, discoveryPlatformID int64, companyID *int64, seenIDs map[string]struct{}) (int64, error) {
 	if len(seenIDs) == 0 {
 		// design: Freshness contract / "Two guards" (the other guard is the
 		// caller skipping this call when zero rows were accepted).
@@ -169,15 +191,20 @@ func MarkJobsStale(ctx context.Context, q Querier, discoveryPlatformID int64, se
 	}
 
 	// SQLite bounds bound parameters per statement: SQLITE_MAX_VARIABLE_NUMBER is
-	// 32766 from 3.32 on (999 before), and one parameter is the platform id. The
-	// source serves 100 elements, so 99 ids sits three orders of magnitude below
-	// the limit and a single inline NOT IN is safe. If the seen set ever
-	// approaches the limit, split it into batches - each batch closing its own
+	// 32766 from 3.32 on (999 before), and the platform id is one of them. A scrape
+	// is capped well below that, so a single inline NOT IN is safe. If the seen set
+	// ever approaches the limit, split it into batches - each batch closing its own
 	// subset, which composes because the predicate is per-row - or load the ids
 	// into a temp table and join against it.
 	placeholders := make([]string, 0, len(seenIDs))
-	args := make([]any, 0, len(seenIDs)+1)
+	args := make([]any, 0, len(seenIDs)+2)
 	args = append(args, discoveryPlatformID)
+
+	companyPredicate := ""
+	if companyID != nil {
+		companyPredicate = "\n   AND company_id = ?"
+		args = append(args, *companyID)
+	}
 	for externalID := range seenIDs {
 		placeholders = append(placeholders, "?")
 		args = append(args, externalID)
@@ -192,7 +219,7 @@ UPDATE job_listings
    SET status = 'closed',
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
  WHERE discovery_platform_id = ?
-   AND status = 'open'
+   AND status = 'open'` + companyPredicate + `
    AND external_id NOT IN (` + strings.Join(placeholders, ", ") + `)
 RETURNING id`
 
