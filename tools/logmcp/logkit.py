@@ -175,9 +175,35 @@ class Loki:
 
 # ---------------------------------------------------------------------------- lookups
 
-# The keys a lookup can be built on. They are structured metadata in the store rather than labels, which
-# is why they can be filtered without parsing the line: see LogKit._metadata_lines.
+# The keys a lookup can be built on.
 LOOKUP_KEYS = ("trace_id", "run_id", "sweep_id", "company", "listing_id", "application_id")
+
+# The subset the collector promotes to structured metadata, so the store can filter them against the
+# index without parsing the line. The rest are parsed with `| json`, which is the right trade for them:
+# they are high-cardinality ids used for narrow lookups, and promoting every one would put a per-entry
+# cost on every line in the store to speed up a query that only ever touches a handful of them.
+#
+# This must match observability/config.alloy. Getting it wrong is silent in a fake and fatal in reality:
+# `| listing_id = "50"` returns zero lines with no error, which reads as "nothing references it".
+METADATA_KEYS = frozenset({"trace_id", "run_id", "sweep_id", "company"})
+
+
+def _id_token(value, field: str) -> str:
+    """A run id as it goes on the wire: jobs-app's integer or apply-app's hex token.
+
+    Rejecting a string outright looked like validation and was actually a missing feature: the same
+    field name carries an integer in one app and a token in the other, so the lookup has to accept both.
+    """
+    if isinstance(value, bool):
+        raise LogKitError(f"{field} must be an id, got {value!r}")
+    if isinstance(value, int):
+        if value <= 0:
+            raise LogKitError(f"{field} must be a positive integer, got {value!r}")
+        return str(value)
+    text = str(value).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", text):
+        raise LogKitError(f"{field} must be a positive integer or a short id token, got {value!r}")
+    return text
 
 
 def _logql_string(value: str) -> str:
@@ -804,21 +830,25 @@ class LogKit:
         silently depend on the line being valid JSON.
         """
         span = parse_window(window)
-        selector = f'{{app=~".+"}} | {key} = {_logql_string(value)}'
+        if key in METADATA_KEYS:
+            selector = f'{{app=~".+"}} | {key} = {_logql_string(value)}'
+        else:
+            selector = f'{{app=~".+"}} | json | {key} = {_logql_string(value)}'
         body = self.loki.query_range(selector, span, limit=limit, direction="forward")
         return [parsed_line(entry) for entry in streams_to_lines(body, limit=limit)], span
 
-    def run_timeline(self, run_id: int, window: str = "7d", limit: int = 500) -> dict:
+    def run_timeline(self, run_id: int | str, window: str = "7d", limit: int = 500) -> dict:
         """Everything one run did, in order, with the numbers that explain it.
 
         A run is one company's scrape - or one application, once apply-app logs these fields - and it
         spans three processes: the batch that chose it, the scrape that performed it, and the agent
         whose every step is logged. The summary is what you would otherwise reconstruct by hand.
         """
-        if not isinstance(run_id, int) or run_id <= 0:
-            raise LogKitError(f"run_id must be a positive integer, got {run_id!r}")
-        lines, span = self._metadata_lines("run_id", str(run_id), window, limit)
-        return _summarise_run(run_id, lines, span)
+        # jobs-app numbers its runs; apply-app uses a short hex token. Both publish the field under the
+        # same name, so both are accepted - requiring an integer made every apply-app run unreachable.
+        token = _id_token(run_id, "run_id")
+        lines, span = self._metadata_lines("run_id", token, window, limit)
+        return _summarise_run(token, lines, span)
 
     def sweep_timeline(self, sweep_id: int, window: str = "7d", limit: int = 3000) -> dict:
         """One sweep: what it planned, which companies it skipped before starting and why, and how each

@@ -406,11 +406,11 @@ def run_body(entries: list[tuple[float, dict]]) -> dict:
 
 
 class TestLookupQueryBuilding(unittest.TestCase):
-    def test_lookups_filter_structured_metadata_without_parsing(self) -> None:
-        # These fields are structured metadata, so the store can filter them against the index. Doing it
-        # with `| json` instead would parse every line in the window to find one run.
+    def test_promoted_keys_are_filtered_without_parsing(self) -> None:
+        # These four fields are structured metadata, so the store can filter them against the index.
+        # Doing it with `| json` instead would parse every line in the window to find one run.
         for key, value in (("run_id", "630"), ("sweep_id", "629"), ("company", "acme"),
-                           ("listing_id", "12"), ("trace_id", "a" * 32)):
+                           ("trace_id", "a" * 32)):
             with self.subTest(key=key):
                 fake = FakeLoki()
                 LogKit(fake).search_logs("{app=~\".+\"}", window="1h")  # primes no state
@@ -426,6 +426,30 @@ class TestLookupQueryBuilding(unittest.TestCase):
                 self.assertIn(f"| {key} = ", query)
                 self.assertNotIn("| json", query)
 
+    def test_high_cardinality_ids_are_filtered_with_json(self) -> None:
+        # The bug this pins: listing_id is NOT structured metadata - only trace_id, run_id, sweep_id and
+        # company are - so a bare `| listing_id = "50"` matches nothing and returns zero lines with no
+        # error, which reads as "no such listing". A fake Loki happily returned the canned body for the
+        # wrong selector, so only asserting the query string catches it.
+        for key, value, argument in (("listing_id", "50", 50), ("application_id", "20", 20)):
+            with self.subTest(key=key):
+                fake = FakeLoki()
+                method = {"listing_id": "listing_story", "application_id": None}[key]
+                if method is None:
+                    continue
+                getattr(LogKit(fake), method)(argument, window="1h")
+                query = fake.queries[0][1]["query"]
+                if key in logkit.METADATA_KEYS:
+                    self.assertNotIn("| json", query)
+                else:
+                    self.assertIn("| json", query,
+                                  f"{key} is not promoted by Alloy, so it must be parsed to be filtered")
+
+    def test_the_promoted_keys_match_what_alloy_promotes(self) -> None:
+        # A constant that drifts from the collector's config fails silently, so it is asserted here.
+        self.assertEqual(logkit.METADATA_KEYS,
+                         frozenset({"trace_id", "run_id", "sweep_id", "company"}))
+
     def test_a_quote_in_a_company_cannot_break_the_query(self) -> None:
         # An unescaped quote makes the query error, and an error is indistinguishable from "no such
         # company" at this end.
@@ -435,8 +459,10 @@ class TestLookupQueryBuilding(unittest.TestCase):
         self.assertIn(r'\"', query, "the quote must be escaped")
         self.assertNotIn('acme" or', query, "the raw quote must not reach the query")
 
-    def test_rejects_ids_that_are_not_positive_integers(self) -> None:
-        for bad in (0, -1, "630"):
+    def test_rejects_ids_that_are_not_ids(self) -> None:
+        # "630" is deliberately absent: a numeric string is a valid token, and rejecting strings outright
+        # was the bug that made every apply-app run unreachable.
+        for bad in (0, -1, "", "has spaces", "x" * 100):
             with self.subTest(bad=bad):
                 with self.assertRaises(LogKitError):
                     LogKit(FakeLoki()).run_timeline(bad)  # type: ignore[arg-type]
@@ -507,6 +533,18 @@ class TestRunTimeline(unittest.TestCase):
         self.assertEqual(got["postings"]["inserted"], 4)
         self.assertEqual(got["agent"]["remote_confirmed"], False)
         self.assertIsNone(got["quality"], "an empty quality must read as absent, not as a value")
+
+    def test_accepts_apply_apps_token_run_ids_as_well_as_integers(self) -> None:
+        # The same field name carries an integer in jobs-app and a hex token in apply-app.
+        query = '{app=~".+"} | run_id = "0bae86becac64b82"'
+        body = run_body([(10, {"msg": "agent_step", "run_id": "0bae86becac64b82", "company": "cisco"})])
+        got = LogKit(FakeLoki(ranges={query: body})).run_timeline("0bae86becac64b82", window="1h")
+        self.assertTrue(got["found"], "an apply-app run id must be reachable")
+        self.assertEqual(got["run_id"], "0bae86becac64b82")
+        for bad in ("", "has spaces", "x" * 100):
+            with self.subTest(bad=bad):
+                with self.assertRaises(LogKitError):
+                    LogKit(FakeLoki()).run_timeline(bad)
 
     def test_an_unknown_run_says_so_rather_than_returning_nothing(self) -> None:
         got = LogKit(FakeLoki()).run_timeline(999999, window="1h")
@@ -592,7 +630,7 @@ class TestCompanyHistorySkips(unittest.TestCase):
 
 class TestListingStory(unittest.TestCase):
     def test_separates_discovery_from_applications(self) -> None:
-        query = '{app=~".+"} | listing_id = "12345"'
+        query = '{app=~".+"} | json | listing_id = "12345"'
         body = stream_body([
             (_ns(500), {"app": "jobs-app", "container": "jobs_app"}, json.dumps({
                 "msg": "listing stored", "listing_id": 12345, "company": "acme", "run_id": 700,
