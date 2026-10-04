@@ -104,7 +104,10 @@ func handleTriggerJob(db *sql.DB, dataDir string, runner *jobRunner) http.Handle
 			}
 			cmd := exec.Command(spec.bin, jobArgs...)
 			cmd.Stdout = logf
-			cmd.Stderr = logf
+			// stderr is duplicated deliberately: the run's own log file keeps the structured JSON, and the
+			// container's stderr carries it to the log collector. Without the second writer a sweep's batch and
+			// scrape lines exist only on disk - which is exactly where the central store cannot see them.
+			cmd.Stderr = io.MultiWriter(logf, os.Stderr)
 			// The child inherits this request's trace, so everything the triggered job logs joins the
 			// request that started it instead of arriving as an unrelated stream.
 			cmd.Env = append(os.Environ(), logging.FromContext(r.Context()).Env()...)
@@ -162,7 +165,10 @@ func handleTriggerJob(db *sql.DB, dataDir string, runner *jobRunner) http.Handle
 
 		cmd := exec.Command(spec.bin, jobArgs...)
 		cmd.Stdout = logf
-		cmd.Stderr = logf
+		// stderr is duplicated deliberately: the run's own log file keeps the structured JSON, and the
+		// container's stderr carries it to the log collector. Without the second writer a sweep's batch and
+		// scrape lines exist only on disk - which is exactly where the central store cannot see them.
+		cmd.Stderr = io.MultiWriter(logf, os.Stderr)
 		cmd.Env = append(os.Environ(), logging.FromContext(r.Context()).Env()...)
 		// Own process group so a stop signals the job plus its descendants.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

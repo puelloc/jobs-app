@@ -40,6 +40,27 @@ Loki indexes **labels, not text**. Full-text search still works; it is done at q
 compressed chunks. For one user producing tens of megabytes per sweep that is not a compromise, it is
 the right trade — and it is the difference between a stack that fits on the Pi and one that does not.
 
+## Which containers are collected
+
+Alloy is told to keep only this project's own stacks:
+
+```alloy
+rule {
+  source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+  regex         = "(jobs|apply-app|apply-console)"
+  action        = "keep"
+}
+```
+
+The host runs fourteen compose projects - immich, nextcloud, homeassistant, authentik, pihole,
+livechart and more - and none of them belong in this store. Shipping them costs disk, makes every
+query noisier, and buries the logs actually under investigation. Widen the regex to add one;
+`observability` is deliberately absent so the stack does not log about itself into itself (Grafana
+alone emits ~1,400 lines an hour).
+
+Because the rule matches on the compose project label, a container not managed by compose is dropped
+too. That is the intended reading of "only my apps".
+
 ## What makes it useful rather than just present
 
 The collector is only half of it. `config.alloy` parses the JSON the apps emit so `trace_id`, `run_id`,

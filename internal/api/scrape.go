@@ -9,6 +9,7 @@ package api
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -100,7 +101,10 @@ func handleScrapeCompany(db *sql.DB, dataDir string, scrapeCmd []string, runner 
 		args = append(args, "--slug", slug, "--vendor", vendor, "--run-id", fmt.Sprintf("%d", runID))
 		cmd := exec.Command(scrapeCmd[0], args...)
 		cmd.Stdout = logf
-		cmd.Stderr = logf
+		// stderr is duplicated deliberately: the run's own log file keeps the structured JSON, and the
+		// container's stderr carries it to the log collector. Without the second writer a sweep's batch and
+		// scrape lines exist only on disk - which is exactly where the central store cannot see them.
+		cmd.Stderr = io.MultiWriter(logf, os.Stderr)
 		// The scrape inherits the trace of the request that triggered it, so this company's logs and
 		// the click that started them are one query.
 		cmd.Env = append(os.Environ(), logging.FromContext(r.Context()).Env()...)

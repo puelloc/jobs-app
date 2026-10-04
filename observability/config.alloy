@@ -30,6 +30,17 @@ discovery.relabel "containers" {
     target_label  = "container"
   }
 
+  // Keep only this project's own stacks. The host runs fourteen compose projects - immich, nextcloud,
+  // homeassistant, authentik, pihole, livechart - and none of them belong in this store: shipping them
+  // costs disk, makes every query noisier, and buries the logs that are actually being investigated.
+  // Add a name here to widen it; `observability` is deliberately absent (Grafana alone emits ~1,400
+  // lines an hour), so the stack does not log about itself into itself.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "(jobs|apply-app|apply-console)"
+    action        = "keep"
+  }
+
   // Compose service and project, so a query can say "everything in the jobs-app project".
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
