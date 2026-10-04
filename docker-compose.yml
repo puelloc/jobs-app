@@ -50,6 +50,11 @@ services:
       SCRAPE_COMMAND: "/usr/local/bin/scrape"
     volumes:
       - ./data:/data
+    networks:
+      # `default` keeps the UI's http://app:8080 working; `shared` is the opt-in network that also
+      # carries Loki, so a container anywhere in the project can reach either by name.
+      - default
+      - shared
     # Chromium needs more than Docker's default 64MB /dev/shm; the browser args
     # also carry --disable-dev-shm-usage as a second line of defense.
     shm_size: "1gb"
@@ -71,6 +76,9 @@ services:
 
     depends_on:
       - app
+    networks:
+      - default
+      - shared
     ports:
       - "8095:8080"   # web UI: http://<nas-ip>:8095
     environment:
@@ -91,3 +99,13 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+networks:
+  # The network shared with the observability stack (and anything else that joins it). Declared
+  # external so several compose projects can attach to one network without any of them owning it:
+  # scripts/deploy.sh creates it if it is missing. The payoff is addressing services by name -
+  # http://loki:3100 from a container - instead of a host gateway address, which is per-network and
+  # changes when Docker re-assigns subnets after a restart.
+  shared:
+    name: ${SHARED_NETWORK:-jobs-net}
+    external: true

@@ -18,6 +18,12 @@ services:
     volumes:
       - ./loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki-data:/loki
+    networks:
+      # `default` keeps Alloy's http://loki:3100 push working. `shared` is the opt-in network the
+      # application stacks also join, which is how a container anywhere in the project reaches Loki as
+      # http://loki:3100 instead of through a host gateway address.
+      - default
+      - shared
     ports:
       # Exposed so the logs MCP server (which may run on another machine) can query it. Loki has no
       # authentication of its own: keep this on the LAN, or put it behind the existing reverse proxy
@@ -82,3 +88,15 @@ volumes:
   loki-data:
   alloy-data:
   grafana-data:
+
+networks:
+  # Shared with the application stacks, which declare the same external network. External means no
+  # single compose project owns it, so `docker compose down` in one project cannot disconnect another's
+  # containers. Create it once:
+  #
+  #   docker network create jobs-net
+  #
+  # (jobs-app's scripts/deploy.sh does this for you.)
+  shared:
+    name: ${SHARED_NETWORK:-jobs-net}
+    external: true

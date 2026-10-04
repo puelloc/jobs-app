@@ -100,6 +100,34 @@ never knew about each other.
   which is fine on the LAN and not fine on the internet. See *Exposing Loki through Nginx Proxy
   Manager* below if the agent runs on another machine.
 
+## Sharing a network with the app stacks
+
+Loki joins an external network (`jobs-net` by default) that the application stacks also join, so any
+container in the project can reach it as **`http://loki:3100`** — by name, not by guessing an address.
+
+```bash
+docker network create jobs-net      # once on the host; jobs-app's deploy.sh does this for you
+```
+
+Then redeploy both stacks. This is worth preferring over a host-gateway address like `172.17.0.1` for
+one reason: **the gateway differs per network and moves.** Each compose project gets its own subnet, so
+the host is at a different address from each one, and Docker reassigns those subnets after restarts — an
+address that resolves today can be wrong tomorrow. A service name cannot.
+
+(On a single host, `172.17.0.1:<port>` often does work for a published port, because the packet is
+routed to the host and delivered to the socket. It is not wrong so much as fragile, and it is
+per-network: `172.17.0.1` is the *default* bridge's gateway, which is not where a compose project
+usually lives.)
+
+To give Nginx Proxy Manager name-based access too, attach it to the same network and forward to
+`http://loki:3100`:
+
+```bash
+docker network connect jobs-net <npm-container>    # re-run if NPM is ever recreated
+```
+
+Otherwise point NPM at the NAS's LAN IP, which needs no network change at all.
+
 ## Exposing Loki through Nginx Proxy Manager
 
 If the agent lives on a different machine from the NAS — or you want a hostname and TLS rather than a

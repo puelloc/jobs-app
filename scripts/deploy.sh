@@ -64,6 +64,20 @@ else
   echo "    data/ is owned and writable by $PUID:$PGID"
 fi
 
+echo "==> shared network"
+# docker-compose.yml joins an external network so this stack and the observability stack (and anything
+# else that opts in) can address each other by service name - `http://loki:3100` rather than the host
+# gateway, which differs per network and moves between reboots. `docker compose up` cannot create an
+# external network, so create it here; the check makes re-running harmless.
+SHARED_NETWORK="${SHARED_NETWORK:-jobs-net}"
+if docker network inspect "$SHARED_NETWORK" >/dev/null 2>&1; then
+  echo "    $SHARED_NETWORK exists"
+else
+  docker network create "$SHARED_NETWORK" >/dev/null &&
+    echo "    created $SHARED_NETWORK" ||
+    echo "    note: could not create $SHARED_NETWORK; services will fail to start"
+fi
+
 echo "==> rebuild + rolling restart"
 # --remove-orphans clears containers from services that no longer exist.
 docker compose up -d --build --remove-orphans
